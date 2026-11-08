@@ -42,7 +42,7 @@ from PySide6.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout, 
                                QStackedWidget, QFrame, QFileDialog, QTabWidget,
                                QGridLayout, QScrollArea, QColorDialog, QGraphicsView, QGraphicsScene, QGraphicsPixmapItem,
                                QSlider, QGraphicsBlurEffect, QMenu, QAbstractButton,
-                               QGraphicsOpacityEffect, QLineEdit, QStackedLayout)
+                               QGraphicsOpacityEffect, QLineEdit, QStackedLayout, QListWidget)
 from PySide6.QtGui import (QPixmap, QPainter, QColor, QPainterPath, QImage, 
                            QLinearGradient, QFont, QKeySequence, QShortcut, QRegion, QPen, QIcon)
 # Multimedia
@@ -209,6 +209,8 @@ DEFAULT_CONFIG = {
     "background_blur": 0,     # Weichzeichner-Stärke (px) fürs Hintergrundbild
     "language": "de",         # "de" oder "en" - siehe TRANSLATIONS weiter unten
     "sort_into_date_folders": True,  # Dateien beim Sync in YYYY-MM-DD-Unterordner einsortieren
+    "backup_dirs": [],          # Respaldos: carpetas en discos externos que reciben una copia del destino
+    "backup_after_sync": True,  # Respaldar automaticamente al terminar cada sincronizacion
     "ui_sound_volume": 70,    # 0-100, Lautstaerke fuer Boot/Klick/Fertig-Sounds
     "ui_sounds_muted": False,
     "profile_name": "",
@@ -261,6 +263,20 @@ TRANSLATIONS = {
         "ps_start_failed": "Konnte PowerShell nicht starten: {e}",
         "sync_failed_detail": "Sync fehlgeschlagen: {detail}",
         "sd_not_readable": "SD-Karte {root} konnte nicht gelesen werden.",
+        "section_backup": "BACKUP AUF EXTERNE LAUFWERKE",
+        "backup_hint": "Der Zielordner wird zusätzlich in diese Ordner kopiert (nur neue/geänderte Dateien, Datumsangaben bleiben erhalten). Im Backup wird nie etwas gelöscht. Nicht angeschlossene Laufwerke werden übersprungen.",
+        "backup_add_btn": "Hinzufügen",
+        "backup_remove_btn": "Entfernen",
+        "backup_now_btn": "Jetzt sichern",
+        "backup_after_sync_checkbox": "Nach jedem Sync automatisch sichern",
+        "backup_choose_title": "Backup-Ordner wählen",
+        "backup_same_as_target": "Der Backup-Ordner darf nicht der Zielordner (oder ein Ordner darin) sein.",
+        "backup_running": "💾 Backup {current}/{total}: {name}",
+        "backup_scanning": "💾 Backup: vergleiche Dateien...",
+        "backup_done": "💾 Backup fertig: {copied} kopiert, {skipped} schon vorhanden.",
+        "backup_missing_suffix": " Nicht verfügbar: {dirs}.",
+        "backup_errors_suffix": " {errors} Fehler.",
+        "backup_none": "Kein Backup-Ordner konfiguriert.",
         "sync_failed_no_response": "Sync fehlgeschlagen: Keine Rückmeldung von der Kamera.",
         "gopro_not_found": "GoPro wurde nicht gefunden. Bitte Verbindung prüfen.",
         "no_device_list": "Konnte nicht auf die Geräteliste zugreifen.",
@@ -367,6 +383,20 @@ TRANSLATIONS = {
         "ps_start_failed": "Could not start PowerShell: {e}",
         "sync_failed_detail": "Sync failed: {detail}",
         "sd_not_readable": "Could not read SD card {root}.",
+        "section_backup": "BACKUP TO EXTERNAL DRIVES",
+        "backup_hint": "The target folder is also copied to these folders (new/changed files only, dates preserved). Nothing is ever deleted in a backup. Drives that are not plugged in are skipped.",
+        "backup_add_btn": "Add",
+        "backup_remove_btn": "Remove",
+        "backup_now_btn": "Back up now",
+        "backup_after_sync_checkbox": "Back up automatically after every sync",
+        "backup_choose_title": "Choose backup folder",
+        "backup_same_as_target": "The backup folder can't be the target folder (or a folder inside it).",
+        "backup_running": "💾 Backup {current}/{total}: {name}",
+        "backup_scanning": "💾 Backup: comparing files...",
+        "backup_done": "💾 Backup done: {copied} copied, {skipped} already there.",
+        "backup_missing_suffix": " Not available: {dirs}.",
+        "backup_errors_suffix": " {errors} errors.",
+        "backup_none": "No backup folder configured.",
         "sync_failed_no_response": "Sync failed: No response from the camera.",
         "gopro_not_found": "GoPro was not found. Please check the connection.",
         "no_device_list": "Could not access the device list.",
@@ -1551,7 +1581,7 @@ foreach ($p in $propCandidates) {
     } catch {}
 }
 if (!$battery) {
-    $battery = Get-DetailValue $ns17 $gopro @("akku", "battery", "batterie", "ladezustand", "charge")
+    $battery = Get-DetailValue $ns17 $gopro @("akku", "battery", "batterie", "ladezustand", "charge", "batería", "bateria", "carga")
 }
 
 $capacity = $null
@@ -1559,8 +1589,8 @@ $free = $null
 $vol = $gopro.GetFolder.Items() | Select-Object -First 1
 if ($vol) {
     $goproFolder = $gopro.GetFolder
-    $capacity = Get-DetailValue $goproFolder $vol @("gesamtgroesse", "gesamtgröße", "total size", "kapazitaet", "kapazität", "capacity")
-    $free = Get-DetailValue $goproFolder $vol @("frei", "free space", "verfuegbar", "verfügbar")
+    $capacity = Get-DetailValue $goproFolder $vol @("gesamtgroesse", "gesamtgröße", "total size", "kapazitaet", "kapazität", "capacity", "tamaño total", "capacidad")
+    $free = Get-DetailValue $goproFolder $vol @("frei", "free space", "verfuegbar", "verfügbar", "espacio libre", "espacio disponible")
 }
 
 $diag = @()
@@ -2236,6 +2266,178 @@ def get_media_capture_date(path, mvhd_local=False):
     return dt
 
 
+# --- [ COPIA CON ATRIBUTOS (SD y respaldos) ] ---
+
+_COPY_CHUNK = 4 * 1024 * 1024
+
+
+def _copy_creation_time(src, dst):
+    """shutil.copystat no copia la fecha de CREACION en Windows; se hace
+    aqui con SetFileTime para que el archivo quede identico al original."""
+    if os.name != "nt":
+        return
+    try:
+        from ctypes import wintypes
+        k32 = ctypes.windll.kernel32
+        st = os.stat(src)
+        ctime = getattr(st, "st_birthtime", None) or st.st_ctime
+        ft_val = int(ctime * 10_000_000) + 116444736000000000
+        ft = wintypes.FILETIME(ft_val & 0xFFFFFFFF, ft_val >> 32)
+        GENERIC_WRITE, OPEN_EXISTING, FILE_SHARE_ALL = 0x40000000, 3, 0x7
+        k32.CreateFileW.restype = wintypes.HANDLE
+        k32.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p,
+                                    wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+        h = k32.CreateFileW(str(dst), GENERIC_WRITE, FILE_SHARE_ALL, None, OPEN_EXISTING, 0, None)
+        if not h or h == ctypes.c_void_p(-1).value:
+            return
+        try:
+            k32.SetFileTime(wintypes.HANDLE(h), ctypes.byref(ft), None, None)
+        finally:
+            k32.CloseHandle(wintypes.HANDLE(h))
+    except Exception:
+        pass
+
+
+def copy_file_preserving(src, dst, size=None, progress_cb=None):
+    """Copia por bloques a "<dst>.part" y renombra al final (nunca queda un
+    archivo a medias con el nombre definitivo), verifica el tamano y copia
+    los atributos: fechas de modificacion/acceso/creacion y flags."""
+    if size is None:
+        size = os.path.getsize(src)
+    tmp = dst + ".part"
+    copied = 0
+    last_pct = -1.0
+    try:
+        with open(src, "rb") as fsrc, open(tmp, "wb") as fdst:
+            while True:
+                buf = fsrc.read(_COPY_CHUNK)
+                if not buf:
+                    break
+                fdst.write(buf)
+                copied += len(buf)
+                if progress_cb and size > 0:
+                    pct = min(100.0, copied * 100.0 / size)
+                    if pct - last_pct >= 0.5:
+                        progress_cb(pct)
+                        last_pct = pct
+        if os.path.getsize(tmp) != size:
+            raise IOError("tamano distinto tras copiar")
+        shutil.copystat(src, tmp)
+        os.replace(tmp, dst)
+        _copy_creation_time(src, dst)
+        return True
+    except Exception as e:
+        print(f"[Copia] Error copiando {src} -> {dst}: {e}")
+        try:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+        except Exception:
+            pass
+        return False
+
+
+def _is_same_or_inside(path, folder):
+    try:
+        path = os.path.normcase(os.path.abspath(path))
+        folder = os.path.normcase(os.path.abspath(folder))
+        return path == folder or path.startswith(folder.rstrip("\\/") + os.sep)
+    except Exception:
+        return False
+
+
+class BackupWorkerThread(QThread):
+    """Respaldo incremental del destino local a una o varias carpetas
+    (tipicamente discos externos): copia solo lo nuevo o cambiado (tamano o
+    fecha distintos), conserva los atributos y NUNCA borra nada en el
+    respaldo, asi un borrado accidental en el PC no se propaga."""
+    progress = Signal(int, int, str, float)
+    finished_backup = Signal(bool, str, dict)
+
+    def __init__(self, source_dir, backup_dirs, lang="de", parent=None):
+        super().__init__(parent)
+        self.source_dir = source_dir
+        self.backup_dirs = [d for d in (backup_dirs or []) if d]
+        self.lang = lang
+
+    @staticmethod
+    def _dest_available(dest):
+        # Si la carpeta no existe pero su unidad si (disco conectado), se crea.
+        if os.path.isdir(dest):
+            return True
+        drive = os.path.splitdrive(os.path.abspath(dest))[0]
+        if drive and os.path.isdir(drive + os.sep):
+            try:
+                os.makedirs(dest, exist_ok=True)
+                return True
+            except Exception:
+                return False
+        return False
+
+    def run(self):
+        if not self.backup_dirs:
+            self.finished_backup.emit(False, tr(self.lang, "backup_none"), {})
+            return
+        self.progress.emit(0, 0, "__CLEANUP__" + tr(self.lang, "backup_scanning"), 0.0)
+
+        files = []
+        for root, _dirs, names in os.walk(self.source_dir):
+            for n in names:
+                if n.endswith(".part"):
+                    continue
+                full = os.path.join(root, n)
+                try:
+                    st = os.stat(full)
+                except OSError:
+                    continue
+                files.append((full, os.path.relpath(full, self.source_dir), st.st_size, st.st_mtime))
+
+        copied = skipped = errors = 0
+        missing = []
+        for dest_root in self.backup_dirs:
+            if _is_same_or_inside(dest_root, self.source_dir) or not self._dest_available(dest_root):
+                missing.append(dest_root)
+                continue
+            pending = []
+            for src, rel, size, mtime in files:
+                dst = os.path.join(dest_root, rel)
+                try:
+                    dst_st = os.stat(dst)
+                    # Tolerancia de 2 s: FAT/exFAT guarda la fecha con esa precision.
+                    if dst_st.st_size == size and abs(dst_st.st_mtime - mtime) <= 2:
+                        skipped += 1
+                        continue
+                except OSError:
+                    pass
+                pending.append((src, rel, size, dst))
+
+            total = len(pending)
+            for idx, (src, rel, size, dst) in enumerate(pending, start=1):
+                name = os.path.basename(rel)
+                self.progress.emit(idx, total, name, 0.0)
+                try:
+                    os.makedirs(os.path.dirname(dst), exist_ok=True)
+                except Exception:
+                    errors += 1
+                    continue
+
+                def cb(pct, idx=idx, total=total, name=name):
+                    self.progress.emit(idx, total, name, pct)
+
+                if copy_file_preserving(src, dst, size, cb):
+                    copied += 1
+                    self.progress.emit(idx, total, name, 100.0)
+                else:
+                    errors += 1
+
+        msg = tr(self.lang, "backup_done", copied=copied, skipped=skipped)
+        if missing:
+            msg += tr(self.lang, "backup_missing_suffix", dirs=", ".join(missing))
+        if errors:
+            msg += tr(self.lang, "backup_errors_suffix", errors=errors)
+        self.finished_backup.emit(errors == 0 and not missing, msg,
+                                  {"copied": copied, "skipped": skipped, "errors": errors, "missing": missing})
+
+
 class SyncWorkerThread(QThread):
     progress = Signal(int, int, str, float)
     finished_sync = Signal(bool, str, dict)
@@ -2259,8 +2461,6 @@ class SyncWorkerThread(QThread):
     # archivos (mucho mas rapida y fiable que MTP), conserva los atributos
     # de cada archivo (fecha de modificacion, de acceso y de CREACION) y lo
     # deja en una carpeta YYYY-MM-DD segun la fecha de captura.
-
-    _COPY_CHUNK = 4 * 1024 * 1024
 
     def _list_sd_media(self, sd_root, extensions):
         dcim = os.path.join(sd_root, "DCIM")
@@ -2290,67 +2490,10 @@ class SyncWorkerThread(QThread):
                 found.append((full, n, size))
         return found
 
-    @staticmethod
-    def _copy_creation_time(src, dst):
-        """shutil.copystat no copia la fecha de CREACION en Windows; se hace
-        aqui con SetFileTime para que el archivo quede identico al original."""
-        if os.name != "nt":
-            return
-        try:
-            from ctypes import wintypes
-            k32 = ctypes.windll.kernel32
-            st = os.stat(src)
-            ctime = getattr(st, "st_birthtime", None) or st.st_ctime
-            ft_val = int(ctime * 10_000_000) + 116444736000000000
-            ft = wintypes.FILETIME(ft_val & 0xFFFFFFFF, ft_val >> 32)
-            GENERIC_WRITE, OPEN_EXISTING, FILE_SHARE_ALL = 0x40000000, 3, 0x7
-            k32.CreateFileW.restype = wintypes.HANDLE
-            k32.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p,
-                                        wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
-            h = k32.CreateFileW(str(dst), GENERIC_WRITE, FILE_SHARE_ALL, None, OPEN_EXISTING, 0, None)
-            if not h or h == ctypes.c_void_p(-1).value:
-                return
-            try:
-                k32.SetFileTime(wintypes.HANDLE(h), ctypes.byref(ft), None, None)
-            finally:
-                k32.CloseHandle(wintypes.HANDLE(h))
-        except Exception:
-            pass
-
     def _copy_file_with_progress(self, src, dst, idx, total, name, size):
-        """Copia por bloques (a un .part y luego renombra, asi nunca queda un
-        archivo a medias con el nombre final), emite progreso y copia los
-        atributos del original."""
-        tmp = dst + ".part"
-        copied = 0
-        last_pct = -1.0
-        try:
-            with open(src, "rb") as fsrc, open(tmp, "wb") as fdst:
-                while True:
-                    buf = fsrc.read(self._COPY_CHUNK)
-                    if not buf:
-                        break
-                    fdst.write(buf)
-                    copied += len(buf)
-                    if size > 0:
-                        pct = min(100.0, copied * 100.0 / size)
-                        if pct - last_pct >= 0.5:
-                            self.progress.emit(idx, total, name, pct)
-                            last_pct = pct
-            if os.path.getsize(tmp) != size:
-                raise IOError("tamano distinto tras copiar")
-            shutil.copystat(src, tmp)           # fechas de modificacion/acceso + atributos
-            os.replace(tmp, dst)
-            self._copy_creation_time(src, dst)  # fecha de creacion (Windows)
-            return True
-        except Exception as e:
-            print(f"[SD] Error copiando {src}: {e}")
-            try:
-                if os.path.exists(tmp):
-                    os.remove(tmp)
-            except Exception:
-                pass
-            return False
+        def cb(pct):
+            self.progress.emit(idx, total, name, pct)
+        return copy_file_preserving(src, dst, size, cb)
 
     def _sd_capture_date(self, path):
         """Fecha para la carpeta. La GoPro pone la fecha de modificacion del
@@ -4941,10 +5084,49 @@ class SyncTabWidget(QWidget):
         if stats.get("copied", 0) > 0:
             SoundManager.play_finish()
         self.sync_finished.emit()
-        QTimer.singleShot(8000, self._hide_sync_popup)
+        if (stats.get("copied", 0) > 0 and self.config.get("backup_after_sync", True)
+                and self.config.get("backup_dirs")):
+            # Mostrar unos segundos el resultado del sync antes del respaldo.
+            QTimer.singleShot(2500, self.start_backup)
+        else:
+            QTimer.singleShot(8000, self._hide_sync_popup)
+
+    def start_backup(self):
+        """Copia el destino local a los discos de respaldo configurados."""
+        if getattr(self, "backup_worker", None) is not None and self.backup_worker.isRunning():
+            return
+        if getattr(self, "sync_worker", None) is not None and self.sync_worker.isRunning():
+            return
+        dirs = self.config.get("backup_dirs") or []
+        if not dirs:
+            self.sync_popup.setText(tr(self.lang, "backup_none"))
+            self.sync_popup.show()
+            QTimer.singleShot(5000, self._hide_sync_popup)
+            return
+        self.backup_worker = BackupWorkerThread(self.sync_target_dir, dirs, self.lang, self)
+        self.backup_worker.progress.connect(self.on_backup_progress)
+        self.backup_worker.finished_backup.connect(self.on_backup_done)
+        self.backup_worker.start()
+
+    @Slot(int, int, str, float)
+    def on_backup_progress(self, current, total, name, file_pct):
+        if name.startswith("__CLEANUP__"):
+            self.sync_popup.setText(name[len("__CLEANUP__"):])
+        else:
+            self.sync_popup.setText(tr(self.lang, "backup_running", current=current, total=total, name=name)
+                                    + f"  {file_pct:.0f}%")
+        self.sync_popup.show()
+
+    @Slot(bool, str, dict)
+    def on_backup_done(self, success, message, stats):
+        self.sync_popup.setText(message)
+        self.sync_popup.show()
+        QTimer.singleShot(10000, self._hide_sync_popup)
 
     def _hide_sync_popup(self):
-        if not (hasattr(self, "sync_worker") and self.sync_worker is not None and self.sync_worker.isRunning()):
+        busy = any(getattr(self, attr, None) is not None and getattr(self, attr).isRunning()
+                   for attr in ("sync_worker", "backup_worker"))
+        if not busy:
             self.sync_popup.hide()
 
     @Slot(dict)
@@ -5700,6 +5882,55 @@ class SettingsDialog(QDialog):
         sort_hint.setStyleSheet("color: #777; font-size: 11px;")
         sort_hint.setWordWrap(True)
         folder_layout.addWidget(sort_hint)
+
+        # --- Respaldos en discos externos ---
+        divider_backup = QFrame()
+        divider_backup.setFixedHeight(1)
+        divider_backup.setStyleSheet("background-color: rgba(255,255,255,0.08); border: none; margin-top: 6px; margin-bottom: 6px;")
+        folder_layout.addWidget(divider_backup)
+
+        section_backup = QLabel(tr(self.lang, "section_backup"))
+        section_backup.setStyleSheet("font-size: 13px; font-weight: 800; letter-spacing: 1px; color: rgba(255,255,255,0.45); background: transparent;")
+        folder_layout.addWidget(section_backup)
+
+        self.list_backup = QListWidget()
+        self.list_backup.setFixedHeight(84)
+        self.list_backup.setStyleSheet("""
+            QListWidget {
+                color: rgba(255,255,255,0.75); font-size: 12px;
+                background-color: rgba(255,255,255,0.04);
+                border: 1px solid rgba(255,255,255,0.08); border-radius: 8px; padding: 4px;
+            }
+            QListWidget::item:selected { background-color: rgba(255,255,255,0.12); }
+        """)
+        for d in self.config.get("backup_dirs", []) or []:
+            self.list_backup.addItem(f"💾  {d}")
+        folder_layout.addWidget(self.list_backup)
+
+        backup_btn_row = QHBoxLayout()
+        backup_btn_row.setSpacing(10)
+        self.btn_backup_add = QPushButton(tr(self.lang, "backup_add_btn"))
+        self.btn_backup_add.clicked.connect(self.add_backup_dir)
+        self.btn_backup_remove = QPushButton(tr(self.lang, "backup_remove_btn"))
+        self.btn_backup_remove.clicked.connect(self.remove_backup_dir)
+        self.btn_backup_now = QPushButton(tr(self.lang, "backup_now_btn"))
+        self.btn_backup_now.clicked.connect(self.backup_now)
+        backup_btn_row.addWidget(self.btn_backup_add)
+        backup_btn_row.addWidget(self.btn_backup_remove)
+        backup_btn_row.addStretch()
+        backup_btn_row.addWidget(self.btn_backup_now)
+        folder_layout.addLayout(backup_btn_row)
+
+        self.chk_backup_after = ToggleSwitch(tr(self.lang, "backup_after_sync_checkbox"))
+        self.chk_backup_after.set_accent(self.config.get("accent_color", "#00f2fe"))
+        self.chk_backup_after.setChecked(self.config.get("backup_after_sync", True), animate=False)
+        self.chk_backup_after.toggled.connect(self.on_backup_after_toggle)
+        folder_layout.addWidget(self.chk_backup_after)
+
+        backup_hint = QLabel(tr(self.lang, "backup_hint"))
+        backup_hint.setStyleSheet("color: #777; font-size: 11px;")
+        backup_hint.setWordWrap(True)
+        folder_layout.addWidget(backup_hint)
         folder_layout.addStretch()
 
         # ============ Tab: Sounds ============
@@ -5861,6 +6092,43 @@ class SettingsDialog(QDialog):
 
     def on_sort_dates_toggle(self, state):
         self.config["sort_into_date_folders"] = bool(state)
+        save_config(self.config)
+
+    def add_backup_dir(self):
+        new_dir = QFileDialog.getExistingDirectory(
+            self, tr(self.lang, "backup_choose_title"), _safe_local_dir(),
+            options=QFileDialog.Option.DontUseNativeDialog
+        )
+        if not new_dir:
+            return
+        new_dir = os.path.normpath(new_dir)
+        if _is_same_or_inside(new_dir, self.config.get("target_dir", "")):
+            show_toast(self, tr(self.lang, "backup_same_as_target"))
+            return
+        dirs = list(self.config.get("backup_dirs", []) or [])
+        if any(os.path.normcase(d) == os.path.normcase(new_dir) for d in dirs):
+            return
+        dirs.append(new_dir)
+        self.config["backup_dirs"] = dirs
+        save_config(self.config)
+        self.list_backup.addItem(f"💾  {new_dir}")
+
+    def remove_backup_dir(self):
+        row = self.list_backup.currentRow()
+        dirs = list(self.config.get("backup_dirs", []) or [])
+        if 0 <= row < len(dirs):
+            dirs.pop(row)
+            self.config["backup_dirs"] = dirs
+            save_config(self.config)
+            self.list_backup.takeItem(row)
+
+    def backup_now(self):
+        sync_page = getattr(self.parent(), "sync_page", None)
+        if sync_page is not None:
+            sync_page.start_backup()
+
+    def on_backup_after_toggle(self, state):
+        self.config["backup_after_sync"] = bool(state)
         save_config(self.config)
 
     def on_volume_changed(self, value):
