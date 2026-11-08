@@ -309,6 +309,12 @@ TRANSLATIONS = {
         "ps_start_failed": "Konnte PowerShell nicht starten: {e}",
         "sync_failed_detail": "Sync fehlgeschlagen: {detail}",
         "sd_not_readable": "SD-Karte {root} konnte nicht gelesen werden.",
+        "queue_duplicate": "Das ist bereits in der Warteschlange.",
+        "queue_running_same": "Das wird gerade schon kopiert.",
+        "activity_queue": "WARTESCHLANGE",
+        "queue_remove": "Entfernen",
+        "queue_import_item": "Importieren aus {folder}",
+        "queue_camera_long": "Kamera synchronisieren",
         "err_gone": "Die Datei ist nicht mehr da (Karte oder Laufwerk getrennt?)",
         "err_device": "Fehler beim Lesen des Geräts (Karte getrennt oder beschädigt?)",
         "err_locked": "Lesen nicht möglich: Datei wird verwendet oder Zugriff verweigert",
@@ -517,6 +523,12 @@ TRANSLATIONS = {
         "ps_start_failed": "Could not start PowerShell: {e}",
         "sync_failed_detail": "Sync failed: {detail}",
         "sd_not_readable": "Could not read SD card {root}.",
+        "queue_duplicate": "That is already in the queue.",
+        "queue_running_same": "That is already being copied.",
+        "activity_queue": "QUEUED",
+        "queue_remove": "Remove",
+        "queue_import_item": "Import from {folder}",
+        "queue_camera_long": "Sync the camera",
         "err_gone": "The file is gone (was the card or drive disconnected?)",
         "err_device": "Error reading the device (card disconnected or damaged?)",
         "err_locked": "Could not read: the file is in use or access is denied",
@@ -725,6 +737,12 @@ TRANSLATIONS = {
         "ps_start_failed": "No se pudo iniciar PowerShell: {e}",
         "sync_failed_detail": "Falló la sincronización: {detail}",
         "sd_not_readable": "No se pudo leer la tarjeta SD {root}.",
+        "queue_duplicate": "Eso ya está en la cola.",
+        "queue_running_same": "Eso ya se está copiando ahora.",
+        "activity_queue": "EN COLA",
+        "queue_remove": "Quitar",
+        "queue_import_item": "Importar desde {folder}",
+        "queue_camera_long": "Sincronizar la cámara",
         "err_gone": "El archivo ya no está (¿se desconectó la tarjeta o el disco?)",
         "err_device": "Error al leer el dispositivo (¿tarjeta desconectada o dañada?)",
         "err_locked": "No se pudo leer: el archivo está en uso o sin permiso",
@@ -6216,6 +6234,7 @@ class SyncTabWidget(QWidget):
         self.progress_panel.cancel_requested.connect(self.cancel_sync)
         self.activity_page = ActivityPage(self.lang, self.get_theme_color())
         self.activity_page.set_panel(self.progress_panel)
+        self.activity_page.remove_queued.connect(self.remove_queued)
         self.lnk_activity = QPushButton(tr(self.lang, "activity_view"))
         self.lnk_activity.setCursor(Qt.CursorShape.PointingHandCursor)
         self.lnk_activity.setStyleSheet(
@@ -6226,6 +6245,7 @@ class SyncTabWidget(QWidget):
         self._camera_task_running = False
         layout.addWidget(self.lnk_activity, alignment=Qt.AlignmentFlag.AlignCenter)
         self._import_queue = []      # tareas en cola: ("import", carpeta, destino) o ("camera", modo)
+        self._current_task = None    # la tarea que se esta copiando ahora
         self._current_title = ""
 
         self.sync_popup = QLabel("")
@@ -6445,8 +6465,37 @@ class SyncTabWidget(QWidget):
     def _queue_labels(self):
         out = []
         for task in self._import_queue:
-            out.append(tr(self.lang, "queue_camera_item") if task[0] == "camera" else os.path.basename(task[1]) or task[1])
+            if task[0] == "camera":
+                text = tr(self.lang, "queue_camera_long")
+                out.append((text, text))
+            else:
+                out.append((tr(self.lang, "queue_import_item", folder=short_path(task[1])), f"{task[1]}  →  {task[2]}"))
         return out
+
+    @staticmethod
+    def _task_key(task):
+        if task[0] == "camera":
+            return ("camera",)
+        return ("import", os.path.normcase(os.path.abspath(task[1])), os.path.normcase(os.path.abspath(task[2])))
+
+    def _try_enqueue(self, task):
+        """Agrega a la cola si no es lo mismo que lo que ya se copia o espera."""
+        key = self._task_key(task)
+        if self._current_task is not None and self._task_key(self._current_task) == key:
+            show_toast(self, tr(self.lang, "queue_running_same"))
+            return False
+        if any(self._task_key(t) == key for t in self._import_queue):
+            show_toast(self, tr(self.lang, "queue_duplicate"))
+            return False
+        self._import_queue.append(task)
+        self._refresh_queue()
+        return True
+
+    def remove_queued(self, idx):
+        """Quita una tarea en espera (la copia en curso no se toca)."""
+        if 0 <= idx < len(self._import_queue):
+            self._import_queue.pop(idx)
+            self._refresh_queue()
 
     def _refresh_queue(self):
         self.progress_panel.set_queue(len(self._import_queue))
@@ -6480,9 +6529,8 @@ class SyncTabWidget(QWidget):
         target = target or self.sync_target_dir
         if self._busy():
             # Ya hay algo copiandose: se agrega a la cola y empieza solo al terminar.
-            self._import_queue.append(("import", folder, target))
-            self._refresh_queue()
-            show_toast(self, tr(self.lang, "import_queued", folder=folder))
+            if self._try_enqueue(("import", folder, target)):
+                show_toast(self, tr(self.lang, "import_queued", folder=folder))
             return
         if _is_same_or_inside(folder, target) or _is_same_or_inside(target, folder):
             show_toast(self, tr(self.lang, "import_same_as_target"))
@@ -6496,7 +6544,8 @@ class SyncTabWidget(QWidget):
         self.sync_worker.progress.connect(self.on_sync_progress)
         self.sync_worker.finished_sync.connect(self.on_sync_done)
         self._camera_task_running = False
-        self._open_progress(tr(self.lang, "sync_title_import_from", folder=folder))
+        self._current_task = ("import", folder, target)
+        self._open_progress(tr(self.lang, "sync_title_import_from", folder=short_path(folder)))
         self.sync_worker.start()
 
     def start_sync(self, mode="all"):
@@ -6504,10 +6553,8 @@ class SyncTabWidget(QWidget):
             return
         if self._busy():
             # Antes no hacia nada: ahora la sincronizacion de la camara se encola.
-            if not any(t[0] == "camera" for t in self._import_queue):
-                self._import_queue.append(("camera", mode))
-                self._refresh_queue()
-            show_toast(self, tr(self.lang, "camera_sync_queued"))
+            if self._try_enqueue(("camera", mode)):
+                show_toast(self, tr(self.lang, "camera_sync_queued"))
             self.activity_requested.emit()
             return
 
@@ -6530,6 +6577,7 @@ class SyncTabWidget(QWidget):
         device = LAST_DEVICE_NAME.get("name") or GOPRO_MODELS.get(self._current_model or "", {}).get("display", "GoPro")
         self.btn_sync.busy_label = tr(self.lang, "busy_syncing")
         self._camera_task_running = True
+        self._current_task = ("camera", mode)
         self._open_progress(tr(self.lang, "sync_title_camera", device=device))
         self.sync_worker.start()
 
@@ -6556,6 +6604,7 @@ class SyncTabWidget(QWidget):
         self.btn_sync.set_idle(self.gopro_connected)
         was_camera = self._camera_task_running
         self._camera_task_running = False
+        self._current_task = None
         self.activity_progress.emit(None)
         self.activity_page.add_history(self._current_title, message, stats)
         self.activity_page.set_running(False)
@@ -6917,6 +6966,17 @@ def _make_language_buttons(current, accent, on_pick):
         box.addWidget(b)
         buttons[code] = b
     return box, buttons
+
+
+def short_path(path, keep=2):
+    """Acorta una ruta dejando la unidad y las ultimas carpetas (se ve el final),
+    p. ej. C:/Users/x/Fotos/GoPro/Tarjeta -> C:/.../GoPro/Tarjeta."""
+    path = os.path.normpath(path or "")
+    drive, rest = os.path.splitdrive(path)
+    parts = [x for x in rest.split(os.sep) if x]
+    if len(parts) <= keep + 1:
+        return path
+    return drive + os.sep + "…" + os.sep + os.sep.join(parts[-keep:])
 
 
 def wrap_path(path):
@@ -7401,6 +7461,7 @@ class SyncProgressPanel(QFrame):
         self.sizes = []
         self.total_bytes = 0
         self._samples = []
+        self.lbl_phase.ensurePolished()
         self.lbl_phase.setText(self.lbl_phase.fontMetrics().elidedText(title, Qt.TextElideMode.ElideMiddle, 300))
         self.lbl_phase.setToolTip(title)
         self.lbl_total.setText(tr(self.lang, "sync_phase_searching"))
@@ -7529,6 +7590,7 @@ class ActivityNavButton(QPushButton):
 class ActivityPage(QWidget):
     """Seccion "Actividad": la copia en curso (panel de progreso), la cola y
     el historial de la sesion con el detalle de cada error."""
+    remove_queued = Signal(int)   # indice de la tarea en cola a quitar
 
     def __init__(self, lang, accent, parent=None):
         super().__init__(parent)
@@ -7548,10 +7610,14 @@ class ActivityPage(QWidget):
         outer.addWidget(self.lbl_idle)
         self.panel_slot = QVBoxLayout()
         outer.addLayout(self.panel_slot)
-        self.lbl_queue = QLabel("")
-        self.lbl_queue.setStyleSheet("font-size: 12px; color: rgba(255,255,255,0.6); background: transparent;")
-        self.lbl_queue.setWordWrap(True)
-        outer.addWidget(self.lbl_queue)
+        # Cola: una fila por tarea en espera, cada una con "Quitar"
+        self.cap_queue = QLabel(tr(lang, "activity_queue"))
+        self.cap_queue.setStyleSheet(cap_style + " margin-top: 6px;")
+        self.cap_queue.hide()
+        outer.addWidget(self.cap_queue)
+        self.queue_box = QVBoxLayout()
+        self.queue_box.setSpacing(6)
+        outer.addLayout(self.queue_box)
         self.cap_history = QLabel(tr(lang, "activity_history"))
         self.cap_history.setStyleSheet(cap_style + " margin-top: 10px;")
         outer.addWidget(self.cap_history)
@@ -7576,7 +7642,35 @@ class ActivityPage(QWidget):
         self.lbl_idle.setVisible(not running)
 
     def set_queue(self, items):
-        self.lbl_queue.setText(tr(self.lang, "sync_queue", n=len(items)) + ":  " + "  ·  ".join(items) if items else "")
+        while self.queue_box.count():
+            w = self.queue_box.takeAt(0).widget()
+            if w is not None:
+                w.deleteLater()
+        self.cap_queue.setVisible(bool(items))
+        for i, (label, tooltip) in enumerate(items):
+            row = QFrame()
+            row.setFixedWidth(560)
+            row.setStyleSheet("QFrame { background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.10);"
+                              " border-radius: 10px; } QLabel { border: none; background: transparent; color: #fff; }"
+                              " QPushButton { background: rgba(255,255,255,0.08); color: #fff; border: 1px solid"
+                              " rgba(255,255,255,0.14); border-radius: 8px; padding: 4px 12px; font-size: 12px; }"
+                              " QPushButton:hover { background: rgba(255,90,100,0.35); }")
+            lay = QHBoxLayout(row)
+            lay.setContentsMargins(12, 6, 8, 6)
+            num = QLabel(f"{i + 1}.")
+            num.setStyleSheet("font-size: 12px; color: rgba(255,255,255,0.5);")
+            lbl = QLabel(lbl_text := label)
+            lbl.setStyleSheet("font-size: 12px;")
+            lbl.setToolTip(tooltip)
+            lbl.ensurePolished()   # aplicar el tamano de letra del estilo antes de medir
+            lbl.setText(lbl.fontMetrics().elidedText(lbl_text, Qt.TextElideMode.ElideMiddle, 380))
+            lbl.setMinimumWidth(0)
+            btn = QPushButton(tr(self.lang, "queue_remove"))
+            btn.clicked.connect(lambda _=False, idx=i: self.remove_queued.emit(idx))
+            lay.addWidget(num)
+            lay.addWidget(lbl, 1)
+            lay.addWidget(btn)
+            self.queue_box.addWidget(row, alignment=Qt.AlignmentFlag.AlignLeft)
 
     def add_history(self, title, message, info):
         self.lbl_empty.hide()
