@@ -1,102 +1,41 @@
-# GoPro Sync
+# GoPro Sync — con HERO5, tarjeta SD y respaldos
 
-Eine kleine, moderne Desktop-App, die deine **GoPro HERO11 Black** (oder jede andere
-GoPro) automatisch erkennt, sobald du sie per USB anschließt, und Fotos/Videos in
-einen von dir festgelegten Ordner kopiert. Zusätzlich gibt es eine Galerie mit
-getrennter Video-/Foto-Ansicht und eingebautem Player.
+Fork de [JelloC19/GoPro-Media-Sync-for-Hero-10-and-Above-D](https://github.com/JelloC19/GoPro-Media-Sync-for-Hero-10-and-Above-D)
+pensado como reemplazo de **GoPro Quik for desktop**: conectas la cámara o la
+tarjeta y copia fotos y videos a tu PC, ordenados en carpetas `AAAA-MM-DD`
+según la fecha de captura, sin duplicar lo que ya tenías.
 
-## Funktionen
+## Qué agrega este fork
 
-- **Automatische Erkennung**: Erkennt die GoPro anhand ihres `DCIM/xxxGOPRO`-Ordners,
-  sobald sie per USB verbunden wird – kein manuelles Suchen nötig.
-- **Abfrage oder Automatik**: Standardmäßig fragt die App "Jetzt synchronisieren?".
-  Kann in den Optionen deaktiviert werden, dann startet der Sync sofort.
-- **Fancy Progress Bubble**: Runde, animierte Fortschrittsanzeige mit Prozent,
-  Dateizähler ("3 von 10 Dateien") und aktuellem Dateinamen.
-- **Galerie-Tab**: Videos und Fotos getrennt als Kachel-Raster mit Thumbnails.
-  Videos werden per Doppelklick in einem eingebauten Player abgespielt
-  (Play/Pause, Zeitleiste, Lautstärke). Fotos öffnen sich in einem
-  Vollbild-Viewer mit Vor/Zurück-Navigation (Pfeiltasten).
-- **Optionen**: nach Datum sortieren, Originale auf der Kamera nach dem
-  Kopieren löschen, bereits vorhandene Dateien werden übersprungen
-  (inkrementeller Sync).
+| Función | Detalle |
+|---|---|
+| **GoPro HERO5 (Black/Session) por USB** | Se detecta como `HERO5 Black` en "Este equipo" (MTP). La fecha de los MP4 de la HERO5 se interpreta en hora local (la cámara no guarda UTC), así que los videos grabados de noche no terminan en la carpeta del día equivocado. |
+| **Sincronizar desde la tarjeta microSD** | Si conectas la tarjeta con un lector, se detecta sola (`DCIM\100GOPRO`…) y el modelo se lee de `MISC\version.txt`. La copia va directo por el sistema de archivos (mucho más rápida y estable que MTP) y **conserva los atributos**: fechas de creación, modificación y acceso. Tiene prioridad la cámara por USB si están las dos. |
+| **Carpetas por fecha como Quik** | `D:\GoPro\2017-07-14\GOPR0001.MP4`. Lo que ya existe con el mismo nombre y tamaño (en cualquier subcarpeta) se salta, así que puedes apuntar a tu carpeta antigua de Quik. |
+| **Fotos RAW** | Incluye `.GPR` (RAW de HERO5 Black y posteriores). |
+| **Respaldo a discos externos** | En *Ajustes → Ubicación → Respaldo* agregas una o varias carpetas (p. ej. `E:\Respaldo GoPro`). Después de cada sync (o con **Respaldar ahora**) la carpeta local se copia de forma incremental: solo lo nuevo o cambiado, con fechas conservadas. **En el respaldo nunca se borra nada**; los discos que no estén conectados se saltan y se avisa. |
+| **Borrar de la cámara/tarjeta** | Si está activado, solo se borra lo que ya está copiado y verificado (mismo tamaño). En la SD también se eliminan los `.LRV`/`.THM` que lo acompañan. |
+| **Columnas MTP en español** | El espacio libre de la cámara ahora se lee también en Windows en español. |
 
-## Installation
+### Rendimiento
 
-Voraussetzung: Python 3.10 oder neuer.
+- **Miniaturas en caché** (`%APPDATA%\GoProSyncPro\thumb_cache`) y decodificación JPEG reducida: abrir la galería con miles de fotos pasa de varios minutos cada vez a segundos (medido: 40 fotos 8,4 s → 0,4 s).
+- **Un solo PowerShell persistente** para detectar la cámara, en vez de abrir uno nuevo cada 0,8 s (~1100 ms → ~170 ms por consulta).
+- El sondeo Open GoPro (solo para HERO9+) ya no usa una IP fija ni frena el bucle con la cámara desconectada; el estado de batería/espacio se consulta cada ~30 s y se pausa durante la copia.
+- Se quitaron el código antiguo sin uso (`core/`, `ui/`, `GoPro Sync.txt`), artefactos de compilación e imágenes que nadie usaba.
 
-```bash
-cd GoProSync
-pip install -r requirements.txt
-python main.py
-```
+## Instalación
 
-Unter Windows reicht ein Doppelklick auf `main.py`, wenn Python korrekt
-installiert ist (oder `py main.py` in der Konsole).
+1. Doble clic en `install.bat` (instala Python si hace falta y los paquetes de `requirements.txt`).
+2. Ejecuta `python main.py`.
+3. En el asistente inicial, elige tu carpeta de destino (p. ej. `D:\GoPro`).
 
-## Eigenes Kamerafoto einbinden
+## Uso con HERO5
 
-Standardmäßig zeigt die App eine gezeichnete Platzhalter-Illustration einer
-Actioncam (aus Copyright-Gründen kann ich kein echtes GoPro-Produktfoto
-mitliefern). Um dein eigenes Foto zu verwenden:
+- **Por USB:** conecta la cámara encendida. Aparece "HERO 5" y pulsas sincronizar. La HERO5 no informa la batería por USB; el espacio de la tarjeta sí se muestra.
+- **Con lector de tarjetas (recomendado para mucho volumen):** inserta la microSD y sincroniza igual. Es la forma más rápida y la que conserva todas las fechas originales.
 
-1. Foto deiner HERO11 Black besorgen (am besten freigestellt, quadratisch,
-   min. 400×400 px, PNG mit transparentem Hintergrund sieht am besten aus).
-2. Datei als `hero11.png` speichern.
-3. In den Ordner `assets/` legen (`GoProSync/assets/hero11.png`).
-4. App neu starten – das Foto wird automatisch verwendet.
+## Notas
 
-## Als eigenständige .exe packen (optional)
-
-```bash
-pip install pyinstaller
-pyinstaller --noconsole --onefile --name "GoProSync" --add-data "assets;assets" main.py
-```
-
-Die fertige `GoProSync.exe` liegt danach im Ordner `dist/`.
-
-## Funktionsweise der Geräteerkennung
-
-GoPros melden sich beim Anschluss per USB (im "Massenspeicher"-Modus) als
-normales Laufwerk mit einem `DCIM`-Ordner, der Unterordner wie `100GOPRO`
-enthält. Die App prüft alle 2 Sekunden im Hintergrund alle angeschlossenen
-Laufwerke auf dieses Muster – das funktioniert zuverlässig unter Windows,
-macOS und Linux, ganz ohne herstellerspezifische Treiber.
-
-> **Hinweis:** Manche GoPro-Modelle bieten zusätzlich einen "GoPro Connect"-
-> bzw. MTP-Modus an. Falls deine Kamera nicht erkannt wird, stelle im
-> Kamera-Menü unter *Verbindungen → USB-Verbindung* sicher, dass
-> **"MTP" bzw. "Massenspeicher"** ausgewählt ist (nicht "GoPro Connect").
-
-## Projektstruktur
-
-```
-GoProSync/
-├── main.py                      Einstiegspunkt
-├── requirements.txt
-├── core/
-│   ├── config.py                Gespeicherte Einstellungen
-│   ├── usb_watcher.py           Erkennt angeschlossene GoPros
-│   ├── file_copier.py           Kopiert Dateien im Hintergrund-Thread
-│   └── media_scanner.py         Scannt Zielordner für die Galerie
-├── ui/
-│   ├── theme.py                 Farbschema / Stylesheet
-│   ├── circular_progress.py     Die "Progress Bubble"
-│   ├── sync_tab.py               Tab 1: Kamera & Sync
-│   ├── gallery_tab.py            Tab 2: Galerie
-│   ├── video_thumbnail.py       Video-Vorschaubilder
-│   ├── video_player_dialog.py   Eingebauter Video-Player
-│   ├── image_viewer_dialog.py   Bildbetrachter
-│   └── main_window.py           Hauptfenster
-└── assets/
-    ├── camera_placeholder.svg   Platzhalter-Illustration
-    └── hero11.png                (optional, dein eigenes Foto)
-```
-
-## Anpassungsideen
-
-- Farbschema in `ui/theme.py` ändern (z. B. eigenes Akzentgrün/-orange).
-- In `core/file_copier.py` weitere Dateiendungen ergänzen (z. B. `.360` für
-  MAX/360-Kameras ist bereits enthalten).
-- Autostart beim Windows-Login: Verknüpfung der `GoProSync.exe` in den
-  Autostart-Ordner (`shell:startup`) legen.
+- Interfaz en alemán/inglés (heredada del proyecto original).
+- Requiere Windows (usa la Shell de Windows para MTP).

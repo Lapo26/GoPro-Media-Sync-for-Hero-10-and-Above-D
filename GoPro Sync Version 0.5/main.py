@@ -23,6 +23,9 @@ import wave
 import array
 import io
 import tempfile
+import hashlib
+import threading
+import queue
 from datetime import datetime, timedelta, timezone
 try:
     import winreg  # nur unter Windows verfuegbar (fuer Autostart-Eintrag)
@@ -44,7 +47,7 @@ from PySide6.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout, 
                                QSlider, QGraphicsBlurEffect, QMenu, QAbstractButton,
                                QGraphicsOpacityEffect, QLineEdit, QStackedLayout, QListWidget)
 from PySide6.QtGui import (QPixmap, QPainter, QColor, QPainterPath, QImage, 
-                           QLinearGradient, QFont, QKeySequence, QShortcut, QRegion, QPen, QIcon)
+                           QLinearGradient, QFont, QKeySequence, QShortcut, QRegion, QPen, QIcon, QImageReader)
 # Multimedia
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput, QSoundEffect, QVideoSink, QMediaMetaData
 from PySide6.QtMultimediaWidgets import QVideoWidget, QGraphicsVideoItem
@@ -151,6 +154,8 @@ GLOBAL_CACHED_BATTERY = None
 #   sd_root -> letra de unidad (p.ej. "E:\\") si la fuente es una tarjeta SD
 #              en un lector; None si la camara esta conectada por USB/MTP.
 ACTIVE_SOURCE = {"model": None, "sd_root": None}
+# Activo mientras un SyncWorkerThread esta copiando (pausa las consultas de estado).
+SYNC_IN_PROGRESS = threading.Event()
 
 def _safe_local_dir():
     """Liefert einen garantiert lokalen, existierenden Ordner (Bilder- oder
@@ -1263,16 +1268,99 @@ def _hide_native_copy_dialog(hwnd):
         pass
 
 
+class _DeviceNameProbe:
+    """Un unico proceso PowerShell que queda abierto y devuelve los nombres
+    de "Este equipo" cada vez que se le pide. Antes se lanzaba un PowerShell
+    nuevo cada 0,8 s (cientos de ms de CPU y un proceso por vuelta mientras
+    la app estuviera abierta). Si el proceso se cuelga (MTP bloqueado) o
+    muere, se reinicia solo."""
+    _SCRIPT = r'''
+try { [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false) } catch {}
+$ErrorActionPreference = "SilentlyContinue"
+$shell = New-Object -ComObject Shell.Application
+while ($true) {
+    $line = [Console]::In.ReadLine()
+    if ($line -eq $null -or $line -eq "quit") { break }
+    foreach ($it in $shell.Namespace(17).Items()) { [Console]::Out.WriteLine($it.Name) }
+    [Console]::Out.WriteLine("<<END>>")
+    [Console]::Out.Flush()
+}
+'''
+
+    def __init__(self):
+        self._proc = None
+        self._lines = None
+        self._lock = threading.Lock()
+
+    def _start(self):
+        self._proc = subprocess.Popen(
+            ['powershell', '-NoProfile', '-NonInteractive', '-Command', self._SCRIPT],
+            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+            text=True, encoding="utf-8", errors="replace", bufsize=1,
+            startupinfo=_hidden_startupinfo()
+        )
+        self._lines = queue.Queue()
+        proc, lines = self._proc, self._lines
+
+        def reader():
+            try:
+                for ln in proc.stdout:
+                    lines.put(ln.rstrip("\r\n"))
+            except Exception:
+                pass
+            lines.put(None)
+        threading.Thread(target=reader, daemon=True).start()
+
+    def _kill(self):
+        try:
+            if self._proc:
+                self._proc.kill()
+        except Exception:
+            pass
+        self._proc = None
+
+    def names(self, timeout=10.0):
+        with self._lock:
+            try:
+                if self._proc is None or self._proc.poll() is not None:
+                    self._start()
+                self._proc.stdin.write("list\n")
+                self._proc.stdin.flush()
+                out = []
+                deadline = time.monotonic() + timeout
+                while True:
+                    ln = self._lines.get(timeout=max(0.1, deadline - time.monotonic()))
+                    if ln is None:
+                        raise RuntimeError("probe terminated")
+                    if ln == "<<END>>":
+                        return "\n".join(out)
+                    out.append(ln)
+            except Exception:
+                self._kill()
+                return ""
+
+    def close(self):
+        with self._lock:
+            try:
+                if self._proc and self._proc.poll() is None:
+                    self._proc.stdin.write("quit\n")
+                    self._proc.stdin.flush()
+            except Exception:
+                pass
+            self._kill()
+
+
+_DEVICE_PROBE = _DeviceNameProbe()
+import atexit
+atexit.register(_DEVICE_PROBE.close)
+
+
 def detect_connected_gopro_model():
     """Prueft, welche der unterstuetzten GoPro-Modelle (siehe GOPRO_MODELS)
     gerade per MTP am PC haengt. Gibt den Modell-Key (z.B. "HERO11") zurueck
     oder None, falls keine unterstuetzte GoPro gefunden wurde."""
     try:
-        cmd = ['powershell', '-NoProfile', '-Command',
-               '$shell = New-Object -ComObject Shell.Application; $shell.Namespace(17).Items() | Select-Object -ExpandProperty Name']
-        result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace",
-                                 startupinfo=_hidden_startupinfo(), timeout=10)
-        names = result.stdout or ""
+        names = _DEVICE_PROBE.names()
         for model in GOPRO_MODEL_ORDER:
             if model in names:
                 return model
@@ -1392,10 +1480,26 @@ def parse_size_to_bytes(raw):
     else: mult = 1
     return num * mult
 
+_LAST_API_ATTEMPT = 0.0
+
+
 def attempt_api_battery_and_force_mtp():
-    global GLOBAL_CACHED_BATTERY
+    """Solo para HERO9 y posteriores conectadas en modo "GoPro Connect": las
+    pasa a MTP via Open GoPro. Antes se intentaba en CADA vuelta del bucle
+    contra una IP fija (172.29.171.51, la de una camara concreta), lo que con
+    la camara desconectada bloqueaba el bucle hasta 5 s cada vez. Ahora: como
+    mucho cada 15 s y solo si existe la red USB de una GoPro (172.2x.x.x),
+    usando la IP de la camara que corresponde a esa red."""
+    global GLOBAL_CACHED_BATTERY, _LAST_API_ATTEMPT
+    if time.monotonic() - _LAST_API_ATTEMPT < 15:
+        return
+    _LAST_API_ATTEMPT = time.monotonic()
+    candidates = _get_usb_subnet_candidates()
+    if not candidates:
+        return
+    parts = candidates[0].split(".")
     try:
-        base_url = "http://172.29.171.51:8080"
+        base_url = f"http://{parts[0]}.{parts[1]}.{parts[2]}.51:8080"
         # Timeout erhöht auf 3.0 Sekunden
         req_state = urllib.request.Request(f"{base_url}/gopro/camera/state", method="GET")
         with urllib.request.urlopen(req_state, timeout=3.0) as response:
@@ -1690,9 +1794,12 @@ class DeviceMonitorThread(QThread):
                 if connected:
                     if self._running: self.status_ready.emit(read_gopro_status(model=model, sd_root=sd_root))
                     cycle = 0
-            elif connected:
+            elif connected and not SYNC_IN_PROGRESS.is_set():
+                # Antes cada ~4 s: un PowerShell que recorre cientos de
+                # columnas MTP. El espacio libre no cambia tan rapido, y
+                # durante una sincronizacion solo competiria con la copia.
                 cycle += 1
-                if cycle >= 5:
+                if cycle >= 38:
                     cycle = 0
                     if self._running: self.status_ready.emit(read_gopro_status(model=model, sd_root=sd_root))
             # War vorher 20x100ms = 2 Sekunden zwischen den Pruefungen - das
@@ -2756,6 +2863,13 @@ class SyncWorkerThread(QThread):
             return None, False
 
     def run(self):
+        SYNC_IN_PROGRESS.set()
+        try:
+            self._run()
+        finally:
+            SYNC_IN_PROGRESS.clear()
+
+    def _run(self):
         if self.sd_root:
             try:
                 self._run_from_sd(self.sd_root)
@@ -3817,18 +3931,61 @@ class ThumbnailLoaderThread(QThread):
     def stop(self):
         self._stop_requested = True
 
+    # Cache en disco de las miniaturas: antes se regeneraban TODAS en cada
+    # apertura de la galeria (decodificando cada JPG de 12 MP completo y el
+    # primer fotograma de cada video). Ahora se guarda una version reducida
+    # (clave = ruta + tamano + fecha) y las siguientes cargas son casi
+    # instantaneas.
+    CACHE_DIR = os.path.join(CONFIG_DIR, "thumb_cache")
+    CACHE_W, CACHE_H = THUMB_W * 2, THUMB_H * 2   # 2x para pantallas HiDPI
+
+    def _cache_path(self, path):
+        try:
+            st = os.stat(path)
+        except OSError:
+            return None
+        key = f"{os.path.normcase(path)}|{st.st_size}|{int(st.st_mtime)}"
+        return os.path.join(self.CACHE_DIR, hashlib.sha1(key.encode("utf-8")).hexdigest() + ".jpg")
+
+    def _load_raw(self, path):
+        cache_file = self._cache_path(path)
+        if cache_file and os.path.exists(cache_file):
+            img = QImage(cache_file)
+            if not img.isNull():
+                return img
+        if self.kind == "video":
+            raw = self._read_video_frame(path)
+        else:
+            # QImageReader con setScaledSize decodifica el JPEG directamente
+            # a menor resolucion: mucho mas rapido que cargarlo entero.
+            reader = QImageReader(path)
+            reader.setAutoTransform(True)
+            size = reader.size()
+            if size.isValid() and size.width() > self.CACHE_W * 2:
+                factor = max(self.CACHE_W / size.width(), self.CACHE_H / size.height())
+                reader.setScaledSize(QSize(max(1, int(size.width() * factor * 1.5)),
+                                           max(1, int(size.height() * factor * 1.5))))
+            raw = reader.read()
+        if raw is not None and not raw.isNull():
+            raw = raw.scaled(self.CACHE_W, self.CACHE_H, Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                             Qt.TransformationMode.SmoothTransformation)
+            if cache_file:
+                try:
+                    os.makedirs(self.CACHE_DIR, exist_ok=True)
+                    raw.save(cache_file, "JPG", 85)
+                except Exception:
+                    pass
+        return raw
+
     def run(self):
         for path in self.files:
             if self._stop_requested:
                 return
             try:
+                raw = self._load_raw(path)
+                cover = make_cover_thumbnail(raw, THUMB_W, THUMB_H)
                 if self.kind == "video":
-                    raw = self._read_video_frame(path)
-                    cover = make_cover_thumbnail(raw, THUMB_W, THUMB_H)
                     cover = draw_play_badge(cover)
-                else:
-                    raw = QImage(path)
-                    cover = make_cover_thumbnail(raw, THUMB_W, THUMB_H)
             except Exception:
                 continue
             if self._stop_requested:
