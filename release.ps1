@@ -53,6 +53,6 @@ Run "git push origin $tag"
 
 $repo = (git remote get-url origin) -replace '\.git$', '' -replace '^git@github\.com:', 'https://github.com/'
 Write-Host ""
-Write-Host "Listo. GitHub Actions esta compilando $tag:" -ForegroundColor Green
+Write-Host "Listo. GitHub Actions esta compilando ${tag}:" -ForegroundColor Green
 Write-Host "  $repo/actions"
 Write-Host "  El release aparecera en: $repo/releases/tag/$tag"
