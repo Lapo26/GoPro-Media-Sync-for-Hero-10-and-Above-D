@@ -5370,7 +5370,6 @@ class SyncTabWidget(QWidget):
     def choose_folder(self):
         new_dir = QFileDialog.getExistingDirectory(
             self, tr(self.lang, "choose_target_dir_title"), _valid_start_dir(self.sync_target_dir),
-            options=QFileDialog.Option.DontUseNativeDialog
         )
         if new_dir:
             self.sync_target_dir = os.path.normpath(new_dir)
@@ -5639,7 +5638,6 @@ class AvatarPreview(QWidget):
     def mousePressEvent(self, event):
         path, _ = QFileDialog.getOpenFileName(
             self, "", _safe_local_dir(), "*.png *.jpg *.jpeg *.bmp *.webp",
-            options=QFileDialog.Option.DontUseNativeDialog
         )
         if path:
             self.set_image_path(path)
@@ -5727,7 +5725,13 @@ def set_autostart(enabled):
         print(f"Autostart konnte nicht gesetzt werden: {e}")
 
 
-_LANGUAGE_LABELS = [("es", "Español"), ("en", "English"), ("de", "Deutsch")]
+# Cada idioma se muestra SIEMPRE en su propio idioma, sin importar el actual.
+_LANGUAGE_LABELS = [
+    ("es", "Español", "Usar GoPro Sync en español"),
+    ("en", "English", "Use GoPro Sync in English"),
+    ("de", "Deutsch", "GoPro Sync auf Deutsch verwenden"),
+]
+LANGUAGE_NATIVE_NAMES = {code: name for code, name, _hint in _LANGUAGE_LABELS}
 
 
 def _make_language_buttons(current, accent, on_pick):
@@ -5735,13 +5739,13 @@ def _make_language_buttons(current, accent, on_pick):
     box = QVBoxLayout()
     box.setSpacing(10)
     buttons = {}
-    for code, label in _LANGUAGE_LABELS:
-        b = QPushButton(label)
+    for code, label, hint in _LANGUAGE_LABELS:
+        b = QPushButton(label + "\n" + hint)
         b.setCheckable(True)
         b.setChecked(code == current)
-        b.setMinimumHeight(48)
+        b.setMinimumHeight(58)
         b.setStyleSheet(
-            "QPushButton { background: rgba(255,255,255,0.06); color: #fff; font-size: 16px; font-weight: 700;"
+            "QPushButton { background: rgba(255,255,255,0.06); color: #fff; font-size: 14px; font-weight: 700;"
             " border: 1px solid rgba(255,255,255,0.15); border-radius: 12px; padding: 10px 18px; text-align: left; }"
             " QPushButton:hover { background: rgba(255,255,255,0.12); }"
             f" QPushButton:checked {{ border: 2px solid {accent}; background: rgba(255,255,255,0.14); }}"
@@ -6033,7 +6037,6 @@ class OnboardingWizard(QWidget):
     def _pick_path(self):
         new_dir = QFileDialog.getExistingDirectory(
             self, tr(self.lang, "choose_target_dir_title"), _valid_start_dir(self.chosen_target_dir),
-            options=QFileDialog.Option.DontUseNativeDialog
         )
         if new_dir:
             self.chosen_target_dir = os.path.normpath(new_dir)
@@ -6443,11 +6446,11 @@ class SettingsDialog(QDialog):
 
         lang_row = QHBoxLayout()
         lang_row.setSpacing(10)
-        self.btn_lang_es = QPushButton(tr(self.lang, "language_es"))
+        self.btn_lang_es = QPushButton(LANGUAGE_NATIVE_NAMES["es"])
         self.btn_lang_es.setCheckable(True)
-        self.btn_lang_en = QPushButton(tr(self.lang, "language_en"))
+        self.btn_lang_en = QPushButton(LANGUAGE_NATIVE_NAMES["en"])
         self.btn_lang_en.setCheckable(True)
-        self.btn_lang_de = QPushButton(tr(self.lang, "language_de"))
+        self.btn_lang_de = QPushButton(LANGUAGE_NATIVE_NAMES["de"])
         self.btn_lang_de.setCheckable(True)
         self.btn_lang_es.setChecked(self.lang == "es")
         self.btn_lang_en.setChecked(self.lang == "en")
@@ -6502,7 +6505,6 @@ class SettingsDialog(QDialog):
         path, _ = QFileDialog.getOpenFileName(
             self, tr(self.lang, "choose_bg_title"), _safe_local_dir(),
             tr(self.lang, "image_filter"),
-            options=QFileDialog.Option.DontUseNativeDialog
         )
         if path:
             self.config["background_image"] = path
@@ -6522,7 +6524,6 @@ class SettingsDialog(QDialog):
     def pick_folder(self):
         new_dir = QFileDialog.getExistingDirectory(
             self, tr(self.lang, "choose_target_dir_title"), _valid_start_dir(self.config.get("target_dir", "")),
-            options=QFileDialog.Option.DontUseNativeDialog
         )
         if new_dir:
             new_dir = os.path.normpath(new_dir)
@@ -6550,7 +6551,6 @@ class SettingsDialog(QDialog):
     def add_backup_dir(self):
         new_dir = QFileDialog.getExistingDirectory(
             self, tr(self.lang, "backup_choose_title"), _safe_local_dir(),
-            options=QFileDialog.Option.DontUseNativeDialog
         )
         if not new_dir:
             return
