@@ -106,6 +106,14 @@ GOPRO_MODELS = {
     "HERO11": {"display": "HERO 11 BLACK", "video": "GoPro Hero 11 .mp4"},
     "HERO10": {"display": "HERO 10 BLACK", "video": "GoPro Hero 10.mp4"},
     "HERO9":  {"display": "HERO 9 BLACK",  "video": "GoPro Hero 9.mp4"},
+    # HERO5 (Black y Session): por USB aparece en "Este equipo" como
+    # "HERO5 Black" / "HERO5 Session" (siempre MTP, no tiene ajuste de modo
+    # USB). "mvhd_local": la HERO5 guarda la fecha del MP4 en hora LOCAL y
+    # no en UTC como las camaras nuevas - ver get_media_capture_date().
+    "HERO5":  {"display": "HERO 5",        "video": "GoPro Hero 5.mp4", "mvhd_local": True},
+    # Tarjeta microSD de una GoPro en un lector de tarjetas, cuyo modelo no
+    # se pudo leer de MISC\version.txt.
+    "SD":     {"display": "GOPRO SD",      "video": "GoPro SD.mp4"},
     # 360-Grad-Kameras: "is_360" sorgt dafuer, dass das Verbindungs-Vorschau-
     # video NICHT flach, sondern im 360-Grad-Pan-Viewer (Ziehen zum Umschauen,
     # Mausrad zum Zoomen) angezeigt wird - siehe VideoFrameView weiter unten.
@@ -117,7 +125,7 @@ GOPRO_MODELS = {
 # von einem anderen, kuerzeren Muster geschluckt wird. "MAX 2" steht bewusst
 # VOR "MAX", sonst wuerde eine angeschlossene MAX 2 faelschlich schon als
 # normale MAX erkannt (das kuerzere Muster wuerde zuerst zuschlagen).
-GOPRO_MODEL_ORDER = ["MISSION 1 PRO", "HERO13", "HERO12", "HERO11", "HERO10", "HERO9", "MAX 2", "MAX"]
+GOPRO_MODEL_ORDER = ["MISSION 1 PRO", "HERO13", "HERO12", "HERO11", "HERO10", "HERO9", "HERO5", "MAX 2", "MAX"]
 
 # Schriftzug-PNGs (GoPro-Font) fuers Ueberlagern des Verbindungs-Videos,
 # je erkanntem Modell. Fehlt eine Datei, faellt automatisch auf den
@@ -137,6 +145,12 @@ GOPRO_MODEL_MATCH_PATTERN = "|".join(GOPRO_MODEL_ORDER)
 
 # Globaler Cache für den API-Akkuwert
 GLOBAL_CACHED_BATTERY = None
+
+# Fuente activa detectada por DeviceMonitorThread:
+#   model   -> clave de GOPRO_MODELS ("HERO5", "HERO11", "SD", ...) o None
+#   sd_root -> letra de unidad (p.ej. "E:\\") si la fuente es una tarjeta SD
+#              en un lector; None si la camara esta conectada por USB/MTP.
+ACTIVE_SOURCE = {"model": None, "sd_root": None}
 
 def _safe_local_dir():
     """Liefert einen garantiert lokalen, existierenden Ordner (Bilder- oder
@@ -246,6 +260,7 @@ TRANSLATIONS = {
         "cleaning_up_popup": "🧹 {name}",
         "ps_start_failed": "Konnte PowerShell nicht starten: {e}",
         "sync_failed_detail": "Sync fehlgeschlagen: {detail}",
+        "sd_not_readable": "SD-Karte {root} konnte nicht gelesen werden.",
         "sync_failed_no_response": "Sync fehlgeschlagen: Keine Rückmeldung von der Kamera.",
         "gopro_not_found": "GoPro wurde nicht gefunden. Bitte Verbindung prüfen.",
         "no_device_list": "Konnte nicht auf die Geräteliste zugreifen.",
@@ -351,6 +366,7 @@ TRANSLATIONS = {
         "cleaning_up_popup": "🧹 {name}",
         "ps_start_failed": "Could not start PowerShell: {e}",
         "sync_failed_detail": "Sync failed: {detail}",
+        "sd_not_readable": "Could not read SD card {root}.",
         "sync_failed_no_response": "Sync failed: No response from the camera.",
         "gopro_not_found": "GoPro was not found. Please check the connection.",
         "no_device_list": "Could not access the device list.",
@@ -1234,6 +1250,91 @@ def detect_connected_gopro_model():
         pass
     return None
 
+_GOPRO_DCIM_SUBDIR_RE = re.compile(r"^\d{3}GOPRO$", re.IGNORECASE)
+
+
+def _model_from_version_txt(root):
+    """Las GoPro escriben MISC\\version.txt en la tarjeta, con una linea tipo
+    "camera type":"HERO5 Black". Devuelve la clave de GOPRO_MODELS o None."""
+    try:
+        with open(os.path.join(root, "MISC", "version.txt"), "r", encoding="utf-8", errors="replace") as f:
+            text = f.read(4096)
+    except Exception:
+        return None
+    m = re.search(r'"camera type"\s*:\s*"([^"]+)"', text, re.IGNORECASE)
+    if not m:
+        return None
+    cam = m.group(1).upper()
+    for model in GOPRO_MODEL_ORDER:
+        if model in cam:
+            return model
+    return None
+
+
+def find_gopro_sd_card():
+    """Busca una tarjeta de GoPro montada como unidad normal (lector de
+    tarjetas, o camara en modo almacenamiento masivo): una unidad con
+    DCIM\\100GOPRO, 101GOPRO, ... Devuelve (raiz, clave_modelo) o (None, None).
+
+    Solo mira unidades extraibles/fijas que NO sean la del sistema, y
+    suprime el dialogo "No hay disco en la unidad" de los lectores vacios."""
+    if os.name != "nt":
+        return None, None
+    try:
+        kernel32 = ctypes.windll.kernel32
+        SEM_FAILCRITICALERRORS = 0x0001
+        old_mode = kernel32.SetErrorMode(SEM_FAILCRITICALERRORS)
+    except Exception:
+        kernel32, old_mode = None, None
+    try:
+        system_drive = (os.getenv("SystemDrive") or "C:").upper()
+        bitmask = kernel32.GetLogicalDrives() if kernel32 else 0
+        for i in range(26):
+            if not (bitmask >> i) & 1:
+                continue
+            letter = chr(ord("A") + i)
+            if letter in ("A", "B") or f"{letter}:" == system_drive:
+                continue
+            root = f"{letter}:\\"
+            try:
+                drive_type = kernel32.GetDriveTypeW(root)
+            except Exception:
+                drive_type = 0
+            # 2 = DRIVE_REMOVABLE, 3 = DRIVE_FIXED (algunos lectores USB se
+            # presentan como disco fijo). Red, CD, RAM disk -> se ignoran.
+            if drive_type not in (2, 3):
+                continue
+            dcim = os.path.join(root, "DCIM")
+            try:
+                if not os.path.isdir(dcim):
+                    continue
+                if not any(_GOPRO_DCIM_SUBDIR_RE.match(e) and os.path.isdir(os.path.join(dcim, e))
+                           for e in os.listdir(dcim)):
+                    continue
+            except OSError:
+                continue
+            return root, (_model_from_version_txt(root) or "SD")
+    finally:
+        if kernel32 is not None and old_mode is not None:
+            try:
+                kernel32.SetErrorMode(old_mode)
+            except Exception:
+                pass
+    return None, None
+
+
+def detect_connected_source():
+    """Primero la camara por USB (MTP); si no hay, una tarjeta SD de GoPro.
+    Devuelve (clave_modelo o None, raiz_sd o None)."""
+    model = detect_connected_gopro_model()
+    if model:
+        return model, None
+    sd_root, sd_model = find_gopro_sd_card()
+    if sd_root:
+        return sd_model, sd_root
+    return None, None
+
+
 def check_gopro_connected():
     """Rueckwaerts-kompatibler bool-Check: True sobald irgendeine
     unterstuetzte GoPro erkannt wird (siehe detect_connected_gopro_model)."""
@@ -1355,7 +1456,25 @@ def read_battery_via_open_gopro(timeout=1.2):
             continue
     return None
 
-def read_gopro_status(write_diag=True, model=None):
+def _fmt_gb(num_bytes):
+    return f"{num_bytes / (1024 ** 3):.1f} GB"
+
+
+def read_gopro_status(write_diag=True, model=None, sd_root=None):
+    # Tarjeta SD en lector: el espacio se lee directo del sistema de archivos
+    # y no hay bateria que consultar.
+    if sd_root:
+        try:
+            usage = shutil.disk_usage(sd_root)
+            pct = int(round((usage.used / usage.total) * 100)) if usage.total else None
+            return {"battery": None, "storage_pct": pct,
+                    "capacity_str": _fmt_gb(usage.total), "free_str": _fmt_gb(usage.free)}
+        except Exception:
+            return {"battery": None, "storage_pct": None, "capacity_str": None, "free_str": None}
+    return _read_gopro_status_mtp(write_diag=write_diag, model=model)
+
+
+def _read_gopro_status_mtp(write_diag=True, model=None):
     """Liest Akkustand und Speicherbelegung der GoPro direkt vom Gerät.
 
     Reihenfolge:
@@ -1375,14 +1494,19 @@ def read_gopro_status(write_diag=True, model=None):
     capacity_str = None
     free_str = None
 
+    # La HERO5 no expone el servicio BLE estandar de bateria ni la API
+    # Open GoPro por USB: probar ambos solo costaria ~12 s por consulta.
+    # Para ella se usan directamente las columnas MTP (paso 3).
+    legacy_model = model == "HERO5"
+
     # 1) Bluetooth LE (bevorzugt - kein Moduswechsel nötig)
     try:
-        battery_pct = read_battery_via_ble(model=model)
+        battery_pct = None if legacy_model else read_battery_via_ble(model=model)
     except Exception:
         battery_pct = None
 
     # 2) Open GoPro HTTP über USB (nur falls Kamera zufällig im Wired-Control-Modus ist)
-    if battery_pct is None:
+    if battery_pct is None and not legacy_model:
         try:
             battery_pct = read_battery_via_open_gopro()
         except Exception:
@@ -1514,7 +1638,7 @@ class DeviceMonitorThread(QThread):
         super().__init__(parent)
         self._running = True
         self._connected = False
-        self._connected_model = None
+        self._connected_model = (None, None)
 
     def stop(self): self._running = False
 
@@ -1524,20 +1648,23 @@ class DeviceMonitorThread(QThread):
             if not self._connected:
                 attempt_api_battery_and_force_mtp()
 
-            model = detect_connected_gopro_model()
+            model, sd_root = detect_connected_source()
             connected = model is not None
-            if model != self._connected_model:
-                self._connected_model = model
+            source_key = (model, sd_root)
+            if source_key != self._connected_model:
+                self._connected_model = source_key
                 self._connected = connected
+                ACTIVE_SOURCE["model"] = model
+                ACTIVE_SOURCE["sd_root"] = sd_root
                 self.connection_changed.emit(connected, model or "")
                 if connected:
-                    if self._running: self.status_ready.emit(read_gopro_status(model=model))
+                    if self._running: self.status_ready.emit(read_gopro_status(model=model, sd_root=sd_root))
                     cycle = 0
             elif connected:
                 cycle += 1
-                if cycle >= 5: 
+                if cycle >= 5:
                     cycle = 0
-                    if self._running: self.status_ready.emit(read_gopro_status(model=model))
+                    if self._running: self.status_ready.emit(read_gopro_status(model=model, sd_root=sd_root))
             # War vorher 20x100ms = 2 Sekunden zwischen den Pruefungen - das
             # Erkennen eines Trennens der GoPro konnte sich dadurch spuerbar
             # verzoegern. Jetzt 0.8 Sekunden, damit ein Verbindungsabbruch
@@ -1557,13 +1684,13 @@ class DeviceMonitorThread(QThread):
 # COM-Objekt) benutzt, um die Dateien auf dem Geraet zu finden und per
 # CopyHere() in den Zielordner zu kopieren.
 
-SYNC_MEDIA_EXTENSIONS = [".mp4", ".jpg", ".jpeg", ".png"]
+SYNC_MEDIA_EXTENSIONS = [".mp4", ".jpg", ".jpeg", ".png", ".gpr"]
 
 # Welche Dateiendungen fuer welchen Sync-Modus (Dropdown am Sync-Button)
 # beruecksichtigt werden.
 MEDIA_EXTENSIONS_BY_MODE = {
-    "all": [".mp4", ".jpg", ".jpeg", ".png"],
-    "pictures": [".jpg", ".jpeg", ".png"],
+    "all": [".mp4", ".jpg", ".jpeg", ".png", ".gpr"],     # .gpr = foto RAW (HERO5 Black y posteriores)
+    "pictures": [".jpg", ".jpeg", ".png", ".gpr"],
     "videos": [".mp4"],
 }
 
@@ -2002,7 +2129,7 @@ def _read_jpeg_exif_datetime(path):
         return None
 
 
-def _read_mp4_creation_time(path):
+def _read_mp4_creation_time(path, assume_local=False):
     """Liest das Aufnahmedatum aus der 'mvhd'-Box im 'moov'-Container eines
     MP4/MOV. Liest dabei NUR die (kleinen) Metadaten-Boxen von der Platte,
     ueberspringt aber die riesige 'mdat'-Box per seek() statt sie zu lesen -
@@ -2071,8 +2198,13 @@ def _read_mp4_creation_time(path):
                 # Mitternacht). Fix: Zeitstempel explizit als UTC markieren
                 # und dann in die lokale Zeitzone des Systems umrechnen,
                 # BEVOR daraus der Kalendertag fuer den Zielordner bestimmt wird.
-                dt_utc = datetime(1904, 1, 1, tzinfo=timezone.utc) + timedelta(seconds=creation_time)
-                dt = dt_utc.astimezone().replace(tzinfo=None)
+                if assume_local:
+                    # HERO5 y anteriores: el valor ya es la hora LOCAL de
+                    # la camara (no UTC); convertirlo correria la fecha.
+                    dt = datetime(1904, 1, 1) + timedelta(seconds=creation_time)
+                else:
+                    dt_utc = datetime(1904, 1, 1, tzinfo=timezone.utc) + timedelta(seconds=creation_time)
+                    dt = dt_utc.astimezone().replace(tzinfo=None)
                 # Grobe Plausibilitaetspruefung - manche Kameras/Schnitt-
                 # programme schreiben hier unplausible Werte (0, Jahr 1904,
                 # oder Datum in der Zukunft durch falsch gestellte Uhr).
@@ -2085,7 +2217,7 @@ def _read_mp4_creation_time(path):
         return None
 
 
-def get_media_capture_date(path):
+def get_media_capture_date(path, mvhd_local=False):
     """Liefert das beste verfuegbare 'Aufnahmedatum' fuer eine Datei:
     zuerst aus den echten Metadaten (EXIF/MP4), sonst als Rueckfallebene
     das Datei-Aenderungsdatum auf der Platte."""
@@ -2094,7 +2226,7 @@ def get_media_capture_date(path):
     if ext in (".jpg", ".jpeg"):
         dt = _read_jpeg_exif_datetime(path)
     elif ext == ".mp4":
-        dt = _read_mp4_creation_time(path)
+        dt = _read_mp4_creation_time(path, assume_local=mvhd_local)
 
     if dt is None:
         try:
@@ -2115,6 +2247,242 @@ class SyncWorkerThread(QThread):
         self.sync_mode = sync_mode if sync_mode in MEDIA_EXTENSIONS_BY_MODE else "all"
         self.lang = lang
         self.sort_into_date_folders = sort_into_date_folders
+        # Se fija la fuente al iniciar, para que no cambie a mitad del sync.
+        self.model = ACTIVE_SOURCE.get("model")
+        self.sd_root = ACTIVE_SOURCE.get("sd_root")
+        self.mvhd_local = bool(GOPRO_MODELS.get(self.model or "", {}).get("mvhd_local"))
+
+    # ------------------------------------------------------------------
+    # Sincronizacion desde TARJETA SD (lector de tarjetas / unidad normal)
+    # ------------------------------------------------------------------
+    # Igual que hacia GoPro Quik for desktop: copia directa por sistema de
+    # archivos (mucho mas rapida y fiable que MTP), conserva los atributos
+    # de cada archivo (fecha de modificacion, de acceso y de CREACION) y lo
+    # deja en una carpeta YYYY-MM-DD segun la fecha de captura.
+
+    _COPY_CHUNK = 4 * 1024 * 1024
+
+    def _list_sd_media(self, sd_root, extensions):
+        dcim = os.path.join(sd_root, "DCIM")
+        exts = tuple(e.lower() for e in extensions)
+        found = []
+        try:
+            subdirs = sorted(e for e in os.listdir(dcim)
+                             if _GOPRO_DCIM_SUBDIR_RE.match(e) and os.path.isdir(os.path.join(dcim, e)))
+        except OSError:
+            return None
+        for sub in subdirs:
+            folder = os.path.join(dcim, sub)
+            try:
+                names = sorted(os.listdir(folder))
+            except OSError:
+                continue
+            for n in names:
+                if n.startswith(".") or not n.lower().endswith(exts):
+                    continue
+                full = os.path.join(folder, n)
+                try:
+                    if not os.path.isfile(full):
+                        continue
+                    size = os.path.getsize(full)
+                except OSError:
+                    continue
+                found.append((full, n, size))
+        return found
+
+    @staticmethod
+    def _copy_creation_time(src, dst):
+        """shutil.copystat no copia la fecha de CREACION en Windows; se hace
+        aqui con SetFileTime para que el archivo quede identico al original."""
+        if os.name != "nt":
+            return
+        try:
+            from ctypes import wintypes
+            k32 = ctypes.windll.kernel32
+            st = os.stat(src)
+            ctime = getattr(st, "st_birthtime", None) or st.st_ctime
+            ft_val = int(ctime * 10_000_000) + 116444736000000000
+            ft = wintypes.FILETIME(ft_val & 0xFFFFFFFF, ft_val >> 32)
+            GENERIC_WRITE, OPEN_EXISTING, FILE_SHARE_ALL = 0x40000000, 3, 0x7
+            k32.CreateFileW.restype = wintypes.HANDLE
+            k32.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p,
+                                        wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+            h = k32.CreateFileW(str(dst), GENERIC_WRITE, FILE_SHARE_ALL, None, OPEN_EXISTING, 0, None)
+            if not h or h == ctypes.c_void_p(-1).value:
+                return
+            try:
+                k32.SetFileTime(wintypes.HANDLE(h), ctypes.byref(ft), None, None)
+            finally:
+                k32.CloseHandle(wintypes.HANDLE(h))
+        except Exception:
+            pass
+
+    def _copy_file_with_progress(self, src, dst, idx, total, name, size):
+        """Copia por bloques (a un .part y luego renombra, asi nunca queda un
+        archivo a medias con el nombre final), emite progreso y copia los
+        atributos del original."""
+        tmp = dst + ".part"
+        copied = 0
+        last_pct = -1.0
+        try:
+            with open(src, "rb") as fsrc, open(tmp, "wb") as fdst:
+                while True:
+                    buf = fsrc.read(self._COPY_CHUNK)
+                    if not buf:
+                        break
+                    fdst.write(buf)
+                    copied += len(buf)
+                    if size > 0:
+                        pct = min(100.0, copied * 100.0 / size)
+                        if pct - last_pct >= 0.5:
+                            self.progress.emit(idx, total, name, pct)
+                            last_pct = pct
+            if os.path.getsize(tmp) != size:
+                raise IOError("tamano distinto tras copiar")
+            shutil.copystat(src, tmp)           # fechas de modificacion/acceso + atributos
+            os.replace(tmp, dst)
+            self._copy_creation_time(src, dst)  # fecha de creacion (Windows)
+            return True
+        except Exception as e:
+            print(f"[SD] Error copiando {src}: {e}")
+            try:
+                if os.path.exists(tmp):
+                    os.remove(tmp)
+            except Exception:
+                pass
+            return False
+
+    def _sd_capture_date(self, path):
+        """Fecha para la carpeta. La GoPro pone la fecha de modificacion del
+        archivo en la tarjeta con su reloj local (la misma que usaba Quik),
+        asi que es la referencia principal; EXIF/MP4 solo si falta."""
+        ext = os.path.splitext(path)[1].lower()
+        dt = None
+        if ext in (".jpg", ".jpeg"):
+            dt = _read_jpeg_exif_datetime(path)
+        if dt is None:
+            try:
+                dt = datetime.fromtimestamp(os.path.getmtime(path))
+                if dt.year < 2000:   # reloj de la camara sin configurar
+                    dt = None
+            except Exception:
+                dt = None
+        if dt is None:
+            dt = get_media_capture_date(path, mvhd_local=self.mvhd_local)
+        return dt
+
+    @staticmethod
+    def _sd_aux_files(src):
+        """Archivos auxiliares de un video en la tarjeta: .LRV (proxy de baja
+        resolucion) y .THM (miniatura). Los capitulos GP01xxxx usan GL01xxxx.LRV."""
+        folder, fname = os.path.split(src)
+        base = os.path.splitext(fname)[0]
+        candidates = [base + ".LRV", base + ".THM"]
+        if base.upper().startswith("GP") and len(base) > 2:
+            candidates.append("GL" + base[2:] + ".LRV")
+        try:
+            present = {n.upper(): n for n in os.listdir(folder)}
+        except OSError:
+            return []
+        return [os.path.join(folder, present[c.upper()]) for c in candidates if c.upper() in present]
+
+    def _run_from_sd(self, sd_root):
+        extensions = MEDIA_EXTENSIONS_BY_MODE[self.sync_mode]
+        items = self._list_sd_media(sd_root, extensions)
+        if items is None:
+            self.finished_sync.emit(False, tr(self.lang, "sd_not_readable", root=sd_root), {})
+            return
+        total = len(items)
+        if total == 0:
+            empty_msg = {
+                "all": tr(self.lang, "no_new_media"),
+                "pictures": tr(self.lang, "no_new_pictures"),
+                "videos": tr(self.lang, "no_new_videos"),
+            }[self.sync_mode]
+            self.finished_sync.emit(True, empty_msg, {"total": 0, "copied": 0, "deleted": 0, "errors": 0})
+            return
+
+        try:
+            os.makedirs(self.target_dir, exist_ok=True)
+        except Exception:
+            pass
+
+        existing_index = {}
+        for root, _dirs, files in os.walk(self.target_dir):
+            for f in files:
+                existing_index.setdefault(f, []).append(os.path.join(root, f))
+
+        copied = errors = deleted = 0
+        to_delete = []
+
+        for idx, (src, name, size) in enumerate(items, start=1):
+            self.progress.emit(idx, total, name, 0.0)
+
+            already = False
+            for existing_path in existing_index.get(name, []):
+                try:
+                    if os.path.getsize(existing_path) == size:
+                        already = True
+                        break
+                except Exception:
+                    pass
+            if already:
+                copied += 1
+                self.progress.emit(idx, total, name, 100.0)
+                if self.delete_after:
+                    to_delete.append(src)
+                continue
+
+            dest_dir = self.target_dir
+            if self.sort_into_date_folders:
+                dest_dir = os.path.join(self.target_dir, self._sd_capture_date(src).strftime("%Y-%m-%d"))
+            try:
+                os.makedirs(dest_dir, exist_ok=True)
+            except Exception:
+                dest_dir = self.target_dir
+
+            dest = os.path.join(dest_dir, name)
+            if os.path.exists(dest):
+                base, ext = os.path.splitext(name)
+                counter = 1
+                while os.path.exists(dest):
+                    dest = os.path.join(dest_dir, f"{base}_{counter}{ext}")
+                    counter += 1
+
+            if self._copy_file_with_progress(src, dest, idx, total, name, size):
+                copied += 1
+                existing_index.setdefault(name, []).append(dest)
+                self.progress.emit(idx, total, name, 100.0)
+                if self.delete_after:
+                    to_delete.append(src)
+            else:
+                errors += 1
+
+        # Borrar de la tarjeta SOLO lo que ya esta copiado y verificado (mismo
+        # tamano), junto con sus .LRV/.THM, como hacia Quik.
+        if self.delete_after and to_delete:
+            self.progress.emit(total, total, "__CLEANUP__" + tr(self.lang, "cleaning_up"), 100.0)
+            for src in to_delete:
+                aux_files = self._sd_aux_files(src) if src.lower().endswith(".mp4") else []
+                try:
+                    os.remove(src)
+                    deleted += 1
+                except Exception as e:
+                    print(f"[SD] No se pudo borrar {src}: {e}")
+                    continue
+                for aux in aux_files:
+                    try:
+                        os.remove(aux)
+                    except Exception:
+                        pass
+
+        result_data = {"total": total, "copied": copied, "deleted": deleted, "errors": errors}
+        msg = tr(self.lang, "sync_result", copied=copied, total=total)
+        if self.delete_after:
+            msg += tr(self.lang, "sync_deleted_suffix", deleted=deleted)
+        if errors:
+            msg += tr(self.lang, "sync_errors_suffix", errors=errors)
+        self.finished_sync.emit(errors == 0, msg, result_data)
 
     def _run_copy_with_progress(self, copy_script, idx, total, name, expected_size, dest_path):
         """Startet das Kopier-Skript im Hintergrund und ermittelt den
@@ -2245,6 +2613,13 @@ class SyncWorkerThread(QThread):
             return None, False
 
     def run(self):
+        if self.sd_root:
+            try:
+                self._run_from_sd(self.sd_root)
+            except Exception as e:
+                traceback.print_exc()
+                self.finished_sync.emit(False, tr(self.lang, "sync_failed_detail", detail=str(e)[:300]), {})
+            return
         # --- Phase 1: einmalig und schnell auflisten ---
         extensions = MEDIA_EXTENSIONS_BY_MODE[self.sync_mode]
         list_script = build_list_script(extensions)
@@ -2406,7 +2781,7 @@ class SyncWorkerThread(QThread):
 
                 if self.sort_into_date_folders and os.path.exists(root_dest_path):
                     try:
-                        capture_dt = get_media_capture_date(root_dest_path)
+                        capture_dt = get_media_capture_date(root_dest_path, mvhd_local=self.mvhd_local)
                         date_folder = capture_dt.strftime("%Y-%m-%d")
                         dated_dir = os.path.join(self.target_dir, date_folder)
                         os.makedirs(dated_dir, exist_ok=True)
