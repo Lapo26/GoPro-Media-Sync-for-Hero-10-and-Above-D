@@ -309,6 +309,35 @@ TRANSLATIONS = {
         "ps_start_failed": "Konnte PowerShell nicht starten: {e}",
         "sync_failed_detail": "Sync fehlgeschlagen: {detail}",
         "sd_not_readable": "SD-Karte {root} konnte nicht gelesen werden.",
+        "ctx_copy_path": "Pfad kopieren",
+        "ctx_show_in_explorer": "Im Explorer anzeigen",
+        "ctx_open": "Öffnen",
+        "ctx_info": "Dateiinformationen",
+        "path_copied": "Pfad kopiert",
+        "info_title": "Dateiinformationen",
+        "info_file": "DATEI",
+        "info_media": "INHALT",
+        "info_name": "Name",
+        "info_path": "Pfad",
+        "info_size": "Größe",
+        "info_created": "Erstellt",
+        "info_modified": "Geändert",
+        "info_camera": "Kamera",
+        "info_firmware": "Firmware",
+        "info_taken": "Aufnahmedatum",
+        "info_resolution": "Auflösung",
+        "info_exposure": "Belichtung",
+        "info_aperture": "Blende",
+        "info_iso": "ISO",
+        "info_focal": "Brennweite",
+        "info_gps": "Ort (GPS)",
+        "info_duration": "Dauer",
+        "info_fps": "Bilder pro Sekunde",
+        "info_codec": "Video-Codec",
+        "info_audio": "Audio",
+        "info_damaged": "Zustand",
+        "info_none": "Keine eingebetteten Metadaten",
+        "history_clear": "Verlauf löschen",
         "queue_duplicate": "Das ist bereits in der Warteschlange.",
         "queue_running_same": "Das wird gerade schon kopiert.",
         "activity_queue": "WARTESCHLANGE",
@@ -523,6 +552,35 @@ TRANSLATIONS = {
         "ps_start_failed": "Could not start PowerShell: {e}",
         "sync_failed_detail": "Sync failed: {detail}",
         "sd_not_readable": "Could not read SD card {root}.",
+        "ctx_copy_path": "Copy path",
+        "ctx_show_in_explorer": "Show in Explorer",
+        "ctx_open": "Open",
+        "ctx_info": "File information",
+        "path_copied": "Path copied",
+        "info_title": "File information",
+        "info_file": "FILE",
+        "info_media": "CONTENT",
+        "info_name": "Name",
+        "info_path": "Path",
+        "info_size": "Size",
+        "info_created": "Created",
+        "info_modified": "Modified",
+        "info_camera": "Camera",
+        "info_firmware": "Firmware",
+        "info_taken": "Date taken",
+        "info_resolution": "Resolution",
+        "info_exposure": "Exposure",
+        "info_aperture": "Aperture",
+        "info_iso": "ISO",
+        "info_focal": "Focal length",
+        "info_gps": "Location (GPS)",
+        "info_duration": "Duration",
+        "info_fps": "Frames per second",
+        "info_codec": "Video codec",
+        "info_audio": "Audio",
+        "info_damaged": "Status",
+        "info_none": "No embedded metadata",
+        "history_clear": "Clear history",
         "queue_duplicate": "That is already in the queue.",
         "queue_running_same": "That is already being copied.",
         "activity_queue": "QUEUED",
@@ -737,6 +795,35 @@ TRANSLATIONS = {
         "ps_start_failed": "No se pudo iniciar PowerShell: {e}",
         "sync_failed_detail": "Falló la sincronización: {detail}",
         "sd_not_readable": "No se pudo leer la tarjeta SD {root}.",
+        "ctx_copy_path": "Copiar ruta",
+        "ctx_show_in_explorer": "Mostrar en el Explorador",
+        "ctx_open": "Abrir",
+        "ctx_info": "Información del archivo",
+        "path_copied": "Ruta copiada",
+        "info_title": "Información del archivo",
+        "info_file": "ARCHIVO",
+        "info_media": "CONTENIDO",
+        "info_name": "Nombre",
+        "info_path": "Ruta",
+        "info_size": "Tamaño",
+        "info_created": "Creado",
+        "info_modified": "Modificado",
+        "info_camera": "Cámara",
+        "info_firmware": "Firmware",
+        "info_taken": "Fecha de captura",
+        "info_resolution": "Resolución",
+        "info_exposure": "Exposición",
+        "info_aperture": "Apertura",
+        "info_iso": "ISO",
+        "info_focal": "Distancia focal",
+        "info_gps": "Ubicación (GPS)",
+        "info_duration": "Duración",
+        "info_fps": "Cuadros por segundo",
+        "info_codec": "Códec de video",
+        "info_audio": "Audio",
+        "info_damaged": "Estado",
+        "info_none": "Sin metadatos internos",
+        "history_clear": "Borrar historial",
         "queue_duplicate": "Eso ya está en la cola.",
         "queue_running_same": "Eso ya se está copiando ahora.",
         "activity_queue": "EN COLA",
@@ -2478,7 +2565,9 @@ while ($queue.Count -gt 0) {
             if ($matched) {
                 $size = 0
                 try { $size = [int64]$item.ExtendedProperty("System.Size") } catch {}
-                [void]$results.Add([PSCustomObject]@{ name = $item.Name; size = $size; path = ($currentPath -join "|") })
+                $dt = ""
+                try { $d = $item.ExtendedProperty("System.DateCreated"); if ($d) { $dt = ([datetime]$d).ToString("yyyy-MM-ddTHH:mm:ss") } } catch {}
+                [void]$results.Add([PSCustomObject]@{ name = $item.Name; size = $size; path = ($currentPath -join "|"); dt = $dt })
             }
         }
     }
@@ -3056,6 +3145,42 @@ def _copy_creation_time(src, dst):
             k32.CloseHandle(wintypes.HANDLE(h))
     except Exception:
         pass
+
+
+def set_file_times(path, dt):
+    """Pone fecha de modificacion, acceso y CREACION = dt (fecha de captura de
+    la camara). Al copiar por USB, Windows dejaba la fecha del momento de la
+    copia; Quik usaba la de captura."""
+    try:
+        ts = dt.timestamp()
+        os.utime(path, (ts, ts))
+    except Exception:
+        return
+    if os.name != "nt":
+        return
+    try:
+        from ctypes import wintypes
+        k32 = ctypes.windll.kernel32
+        ft_val = int(ts * 10_000_000) + 116444736000000000
+        ft = wintypes.FILETIME(ft_val & 0xFFFFFFFF, ft_val >> 32)
+        k32.CreateFileW.restype = wintypes.HANDLE
+        k32.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, ctypes.c_void_p,
+                                    wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+        h = k32.CreateFileW(str(path), 0x40000000, 0x7, None, 3, 0, None)
+        if h and h != ctypes.c_void_p(-1).value:
+            try:
+                k32.SetFileTime(wintypes.HANDLE(h), ctypes.byref(ft), None, None)
+            finally:
+                k32.CloseHandle(wintypes.HANDLE(h))
+    except Exception:
+        pass
+
+
+def _parse_camera_dt(text):
+    try:
+        return datetime.strptime(text, "%Y-%m-%dT%H:%M:%S") if text else None
+    except Exception:
+        return None
 
 
 def _remove_stale_part(path):
@@ -3837,10 +3962,13 @@ class SyncWorkerThread(QThread):
             if isinstance(copy_result, dict) and copy_result.get("ok"):
                 copied += 1
                 final_path = root_dest_path
+                camera_dt = _parse_camera_dt(entry.get("dt"))
+                if camera_dt is not None:
+                    set_file_times(root_dest_path, camera_dt)
 
                 if self.sort_into_date_folders and os.path.exists(root_dest_path):
                     try:
-                        capture_dt = get_media_capture_date(root_dest_path, mvhd_local=self.mvhd_local)
+                        capture_dt = camera_dt or get_media_capture_date(root_dest_path, mvhd_local=self.mvhd_local)
                         date_folder = capture_dt.strftime("%Y-%m-%d")
                         dated_dir = os.path.join(self.target_dir, date_folder)
                         if cam_folder:
@@ -3867,7 +3995,7 @@ class SyncWorkerThread(QThread):
                         # Verschieben fehlgeschlagen (z.B. Rechteproblem) -
                         # Datei bleibt einfach flach im Zielordner-Root
                         # liegen, statt den Sync abzubrechen.
-                        final_path = root_dest_path
+                        final_path = root_dest_path or final_path
 
                 # Damit ein und dieselbe Datei (z.B. bei zwei identisch
                 # benannten Eintraegen im selben Sync-Lauf) nicht doppelt
@@ -5288,8 +5416,9 @@ class ImageViewerDialog(QDialog):
 
 
 class ClickableThumbnail(QLabel):
-    def __init__(self, pixmap, on_click, tooltip="", parent=None):
+    def __init__(self, pixmap, on_click, tooltip="", parent=None, on_context=None):
         super().__init__(parent)
+        self._on_context = on_context
         self.setPixmap(pixmap)
         self.setFixedSize(pixmap.deviceIndependentSize().toSize())
         self.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -5303,8 +5432,14 @@ class ClickableThumbnail(QLabel):
         # se recalculaba en cada repintado y volvia lenta toda la galeria.
 
     def mousePressEvent(self, event):
-        if self._on_click: self._on_click()
+        # Solo el clic izquierdo abre (el derecho muestra el menu contextual)
+        if event.button() == Qt.MouseButton.LeftButton and self._on_click:
+            self._on_click()
         super().mousePressEvent(event)
+
+    def contextMenuEvent(self, event):
+        if self._on_context:
+            self._on_context(event.globalPos())
 
 
 # --- [ DATUMS-TRENNER FUER DIE GALERIE ] ---
@@ -5482,6 +5617,23 @@ class GalleryBase(QWidget):
     def show_empty(self):
         self.scroll.hide()
         self.empty_lbl.show()
+
+    def _show_context_menu(self, path, global_pos):
+        """Clic derecho en una miniatura: ruta, copiar ruta, Explorador,
+        abrir e informacion del archivo (metadatos)."""
+        menu = QMenu(self)
+        head = menu.addAction(short_path(path, keep=3))
+        head.setEnabled(False)
+        menu.addSeparator()
+        menu.addAction(tr(self.lang, "ctx_open"),
+                       lambda: self.play_video(path) if self.KIND == "video" else self.open_image(path))
+        menu.addAction(tr(self.lang, "ctx_info"), lambda: MediaInfoDialog(
+            self, self.lang, path, getattr(self.window(), "get_current_theme_color", lambda: "#00f2fe")()).exec())
+        menu.addSeparator()
+        menu.addAction(tr(self.lang, "ctx_copy_path"), lambda: (QApplication.clipboard().setText(os.path.normpath(path)),
+                                                               show_toast(self, tr(self.lang, "path_copied"))))
+        menu.addAction(tr(self.lang, "ctx_show_in_explorer"), lambda: show_in_explorer(path))
+        menu.exec(global_pos)
 
     def _columns_for_width(self):
         """Cuantas miniaturas entran a lo ancho (siempre dejando lugar a la
@@ -5735,9 +5887,11 @@ class GalleryBase(QWidget):
             existing.setPixmap(pix)   # version nitida que reemplaza la rapida
             return
         if self.KIND == "video":
-            lbl = ClickableThumbnail(pix, lambda checked=False, p=path: self.play_video(p), tooltip=os.path.basename(path))
+            lbl = ClickableThumbnail(pix, lambda checked=False, p=path: self.play_video(p), tooltip=path,
+                                     on_context=lambda pos, p=path: self._show_context_menu(p, pos))
         else:
-            lbl = ClickableThumbnail(pix, lambda checked=False, p=path: self.open_image(p), tooltip=os.path.basename(path))
+            lbl = ClickableThumbnail(pix, lambda checked=False, p=path: self.open_image(p), tooltip=path,
+                                     on_context=lambda pos, p=path: self._show_context_menu(p, pos))
         self._loaded_count += 1
         self._thumb_widgets[path] = lbl
         cell = self._cell_for_path.get(path)
@@ -7547,6 +7701,322 @@ class SyncProgressPanel(QFrame):
         self.cancel_requested.emit()
 
 
+# --- [ METADATOS DE ARCHIVOS (ficha de informacion) ] ---
+
+_EXIF_TAGS = {0x010F: "make", 0x0110: "model", 0x0131: "software", 0x0132: "datetime", 0x9003: "taken",
+              0x829A: "exposure", 0x829D: "fnumber", 0x8827: "iso", 0x920A: "focal", 0xA405: "focal35",
+              0xA002: "width", 0xA003: "height"}
+
+
+def read_jpeg_exif(path):
+    """Lee los datos EXIF principales de un JPG (camara, fecha, exposicion,
+    ISO, GPS...). Solo lee el principio del archivo."""
+    out = {}
+    try:
+        with open(path, "rb") as f:
+            head = f.read(256 * 1024)
+        if head[:2] != b"\xff\xd8":
+            return out
+        pos = 2
+        tiff = None
+        while pos + 4 <= len(head) and head[pos] == 0xFF:
+            marker, seg = head[pos + 1], struct.unpack(">H", head[pos + 2:pos + 4])[0]
+            if marker == 0xE1 and head[pos + 4:pos + 10] == b"Exif\x00\x00":
+                tiff = head[pos + 10:pos + 2 + seg]
+                break
+            if marker in (0xDA, 0xD9):
+                break
+            pos += 2 + seg
+        if not tiff:
+            return out
+        bo = "<" if tiff[:2] == b"II" else ">"
+        sizes = {1: 1, 2: 1, 3: 2, 4: 4, 5: 8, 7: 1, 9: 4, 10: 8}
+
+        def value(typ, count, raw_off):
+            n = sizes.get(typ, 1) * count
+            data = tiff[raw_off:raw_off + 4] if n <= 4 else tiff[struct.unpack(bo + "I", tiff[raw_off:raw_off + 4])[0]:][:n]
+            if typ == 2:
+                return data.split(b"\x00")[0].decode("latin1", "replace").strip()
+            if typ == 3:
+                return struct.unpack(bo + "H", data[:2])[0]
+            if typ == 4:
+                return struct.unpack(bo + "I", data[:4])[0]
+            if typ in (5, 10):
+                vals = []
+                for i in range(count):
+                    a, b = struct.unpack(bo + ("ii" if typ == 10 else "II"), data[i * 8:i * 8 + 8])
+                    vals.append((a, b))
+                return vals if count > 1 else vals[0]
+            return None
+
+        def read_ifd(off, into, tags=None, follow=True):
+            n = struct.unpack(bo + "H", tiff[off:off + 2])[0]
+            for i in range(n):
+                e = off + 2 + 12 * i
+                tag, typ, count = struct.unpack(bo + "HHI", tiff[e:e + 8])
+                if follow and tag in (0x8769, 0x8825):
+                    sub = struct.unpack(bo + "I", tiff[e + 8:e + 12])[0]
+                    if tag == 0x8769:
+                        read_ifd(sub, into)
+                    else:
+                        gps = {}
+                        read_ifd(sub, gps, tags={1: "latref", 2: "lat", 3: "lonref", 4: "lon"}, follow=False)
+                        into["gps"] = gps
+                    continue
+                key = (tags or _EXIF_TAGS).get(tag)
+                if key:
+                    try:
+                        into[key] = value(typ, count, e + 8)
+                    except Exception:
+                        pass
+
+        read_ifd(struct.unpack(bo + "I", tiff[4:8])[0], out)
+    except Exception:
+        pass
+    return out
+
+
+def _mp4_boxes(data, start=0, end=None):
+    end = len(data) if end is None else end
+    pos = start
+    while pos + 8 <= end:
+        size = struct.unpack(">I", data[pos:pos + 4])[0]
+        typ = data[pos + 4:pos + 8]
+        hdr = 8
+        if size == 1:
+            size = struct.unpack(">Q", data[pos + 8:pos + 16])[0]
+            hdr = 16
+        elif size == 0:
+            size = end - pos
+        if size < hdr:
+            break
+        yield typ, pos + hdr, pos + size
+        pos += size
+
+
+def read_mp4_info(path):
+    """Duracion, resolucion, fps, codec y datos de la GoPro (firmware) de un MP4."""
+    info = {}
+    try:
+        with open(path, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            fsize = f.tell()
+            pos = 0
+            moov = None
+            while pos + 8 <= fsize:
+                f.seek(pos)
+                h = f.read(16)
+                size = struct.unpack(">I", h[:4])[0]
+                if size == 1:
+                    size = struct.unpack(">Q", h[8:16])[0]
+                elif size == 0:
+                    size = fsize - pos
+                if size < 8:
+                    break
+                if h[4:8] == b"moov":
+                    f.seek(pos)
+                    moov = f.read(min(size, 32 * 1024 * 1024))
+                    break
+                pos += size
+        if not moov:
+            return info
+        for typ, a, b in _mp4_boxes(moov, 8):
+            if typ == b"mvhd":
+                v = moov[a]
+                if v == 1:
+                    ts, dur = struct.unpack(">IQ", moov[a + 20:a + 32])
+                else:
+                    ts, dur = struct.unpack(">II", moov[a + 12:a + 20])
+                if ts:
+                    info["duration"] = dur / ts
+            elif typ == b"udta":
+                for t2, a2, b2 in _mp4_boxes(moov, a, b):
+                    if t2 == b"FIRM":
+                        info["firmware"] = moov[a2:b2].split(b"\x00")[0].decode("latin1", "replace").strip()
+            elif typ == b"trak":
+                kind = None
+                track = {}
+                for t2, a2, b2 in _mp4_boxes(moov, a, b):
+                    if t2 == b"tkhd":
+                        track["w"] = struct.unpack(">I", moov[b2 - 8:b2 - 4])[0] >> 16
+                        track["h"] = struct.unpack(">I", moov[b2 - 4:b2])[0] >> 16
+                    elif t2 == b"mdia":
+                        for t3, a3, b3 in _mp4_boxes(moov, a2, b2):
+                            if t3 == b"hdlr":
+                                kind = moov[a3 + 8:a3 + 12]
+                            elif t3 == b"mdhd":
+                                v = moov[a3]
+                                track["timescale"] = struct.unpack(">I", moov[a3 + (20 if v == 1 else 12):a3 + (24 if v == 1 else 16)])[0]
+                            elif t3 == b"minf":
+                                for t4, a4, b4 in _mp4_boxes(moov, a3, b3):
+                                    if t4 == b"stbl":
+                                        for t5, a5, b5 in _mp4_boxes(moov, a4, b4):
+                                            if t5 == b"stsd":
+                                                track["codec"] = moov[a5 + 12:a5 + 16].decode("latin1", "replace")
+                                            elif t5 == b"stts" and struct.unpack(">I", moov[a5 + 4:a5 + 8])[0]:
+                                                track["delta"] = struct.unpack(">I", moov[a5 + 12:a5 + 16])[0]
+                if kind == b"vide" and "video" not in info:
+                    info["video"] = track
+                elif kind == b"soun" and "audio" not in info:
+                    info["audio"] = track
+    except Exception:
+        pass
+    return info
+
+
+_CODEC_NAMES = {"avc1": "H.264 (AVC)", "hvc1": "H.265 (HEVC)", "hev1": "H.265 (HEVC)", "mp4a": "AAC"}
+
+
+def describe_media(path, lang):
+    """Lista de (seccion, etiqueta, valor) para la ficha de informacion."""
+    rows = []
+    try:
+        st = os.stat(path)
+        rows += [("file", tr(lang, "info_name"), os.path.basename(path)),
+                 ("file", tr(lang, "info_path"), os.path.dirname(path)),
+                 ("file", tr(lang, "info_size"), f"{_human_size(st.st_size)}  ({st.st_size:,} bytes)".replace(",", ".")),
+                 ("file", tr(lang, "info_created"), datetime.fromtimestamp(getattr(st, "st_birthtime", st.st_ctime)).strftime("%d/%m/%Y %H:%M:%S")),
+                 ("file", tr(lang, "info_modified"), datetime.fromtimestamp(st.st_mtime).strftime("%d/%m/%Y %H:%M:%S"))]
+    except OSError:
+        pass
+    low = path.lower()
+    media = []
+    if low.endswith((".jpg", ".jpeg")):
+        ex = read_jpeg_exif(path)
+        cam = " ".join(x for x in (ex.get("make"), ex.get("model")) if x)
+        if cam:
+            media.append((tr(lang, "info_camera"), cam))
+        if ex.get("software"):
+            media.append((tr(lang, "info_firmware"), ex["software"]))
+        taken = ex.get("taken") or ex.get("datetime")
+        if taken:
+            try:
+                taken = datetime.strptime(taken, "%Y:%m:%d %H:%M:%S").strftime("%d/%m/%Y %H:%M:%S")
+            except Exception:
+                pass
+            media.append((tr(lang, "info_taken"), taken))
+        if ex.get("width") and ex.get("height"):
+            mp = ex["width"] * ex["height"] / 1e6
+            media.append((tr(lang, "info_resolution"), f"{ex['width']} × {ex['height']}  ({mp:.1f} MP)"))
+        if isinstance(ex.get("exposure"), tuple) and ex["exposure"][1]:
+            a, b = ex["exposure"]
+            media.append((tr(lang, "info_exposure"), f"1/{round(b / a)} s" if a and a < b else f"{a / b:g} s"))
+        if isinstance(ex.get("fnumber"), tuple) and ex["fnumber"][1]:
+            media.append((tr(lang, "info_aperture"), f"f/{ex['fnumber'][0] / ex['fnumber'][1]:.1f}"))
+        if ex.get("iso"):
+            media.append((tr(lang, "info_iso"), str(ex["iso"])))
+        if isinstance(ex.get("focal"), tuple) and ex["focal"][1]:
+            txt = f"{ex['focal'][0] / ex['focal'][1]:.1f} mm"
+            if ex.get("focal35"):
+                txt += f"  ({ex['focal35']} mm eq. 35 mm)"
+            media.append((tr(lang, "info_focal"), txt))
+        gps = ex.get("gps") or {}
+        try:
+            def deg(v):
+                return v[0][0] / v[0][1] + v[1][0] / v[1][1] / 60 + v[2][0] / v[2][1] / 3600
+            lat = deg(gps["lat"]) * (-1 if gps.get("latref") == "S" else 1)
+            lon = deg(gps["lon"]) * (-1 if gps.get("lonref") == "W" else 1)
+            media.append((tr(lang, "info_gps"), f"{lat:.6f}, {lon:.6f}"))
+        except Exception:
+            pass
+    elif low.endswith(".mp4"):
+        if is_broken_mp4(path):
+            media.append((tr(lang, "info_damaged"), "⚠ " + tr(lang, "video_damaged")))
+        else:
+            mi = read_mp4_info(path)
+            if mi.get("firmware"):
+                media.append((tr(lang, "info_firmware"), mi["firmware"]))
+            if mi.get("duration"):
+                d = int(mi["duration"])
+                media.append((tr(lang, "info_duration"), f"{d // 3600:d}:{d % 3600 // 60:02d}:{d % 60:02d}" if d >= 3600
+                              else f"{d // 60:d}:{d % 60:02d}"))
+            v = mi.get("video") or {}
+            if v.get("w"):
+                media.append((tr(lang, "info_resolution"), f"{v['w']} × {v['h']}"))
+            if v.get("timescale") and v.get("delta"):
+                media.append((tr(lang, "info_fps"), f"{v['timescale'] / v['delta']:.2f}".rstrip("0").rstrip(".")))
+            if v.get("codec"):
+                media.append((tr(lang, "info_codec"), _CODEC_NAMES.get(v["codec"], v["codec"])))
+            a = mi.get("audio") or {}
+            if a.get("codec"):
+                rate = f", {a['timescale'] / 1000:g} kHz" if a.get("timescale") else ""
+                media.append((tr(lang, "info_audio"), _CODEC_NAMES.get(a["codec"], a["codec"]) + rate))
+    if not media:
+        media.append(("", tr(lang, "info_none")))
+    rows += [("media", k, v) for k, v in media]
+    return rows
+
+
+def show_in_explorer(path):
+    try:
+        subprocess.Popen(["explorer", "/select,", os.path.normpath(path)])
+    except Exception:
+        pass
+
+
+class MediaInfoDialog(QDialog):
+    """Ficha de informacion de una foto/video (clic derecho > Informacion)."""
+
+    def __init__(self, parent, lang, path, accent):
+        super().__init__(parent)
+        self.setWindowTitle(tr(lang, "info_title"))
+        self.setMinimumWidth(560)
+        self.setStyleSheet(f"""
+            QDialog {{ background: #1c1e29; }}
+            QLabel {{ color: #fff; background: transparent; }}
+            * {{ font-family: {FONT_STACK}; }}
+            QPushButton {{ background: rgba(255,255,255,0.08); color: #fff; border: 1px solid rgba(255,255,255,0.14);
+                          border-radius: 10px; padding: 8px 16px; font-weight: 600; }}
+            QPushButton:hover {{ background: rgba(255,255,255,0.16); }}
+            QPushButton#primary {{ background: {accent}; color: #0d0d12; border: none; font-weight: 800; }}
+        """)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(26, 22, 26, 20)
+        lay.setSpacing(6)
+        t = QLabel(os.path.basename(path))
+        t.setStyleSheet("font-size: 18px; font-weight: 800;")
+        lay.addWidget(t)
+        current = None
+        grid = None
+        for section, label, val in describe_media(path, lang):
+            if section != current:
+                current = section
+                cap = QLabel(tr(lang, "info_file" if section == "file" else "info_media"))
+                cap.setStyleSheet("font-size: 11px; font-weight: 800; letter-spacing: 1px; color: rgba(255,255,255,0.45);"
+                                  " margin-top: 10px;")
+                lay.addWidget(cap)
+                grid = QGridLayout()
+                grid.setHorizontalSpacing(16)
+                grid.setVerticalSpacing(5)
+                grid.setColumnStretch(1, 1)
+                grid.setColumnMinimumWidth(0, 130)   # mismas columnas en ambas secciones
+                lay.addLayout(grid)
+            r = grid.rowCount()
+            k = QLabel(label)
+            k.setStyleSheet("font-size: 12px; color: rgba(255,255,255,0.55);")
+            v = QLabel(wrap_path(val) if label == tr(lang, "info_path") else val)
+            v.setWordWrap(True)
+            v.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+            v.setStyleSheet("font-size: 13px;")
+            grid.addWidget(k, r, 0, Qt.AlignmentFlag.AlignTop)
+            grid.addWidget(v, r, 1)
+        lay.addSpacing(10)
+        row = QHBoxLayout()
+        b_copy = QPushButton(tr(lang, "ctx_copy_path"))
+        b_copy.clicked.connect(lambda: (QApplication.clipboard().setText(os.path.normpath(path)),
+                                        show_toast(self, tr(lang, "path_copied"))))
+        b_show = QPushButton(tr(lang, "ctx_show_in_explorer"))
+        b_show.clicked.connect(lambda: show_in_explorer(path))
+        b_close = QPushButton(tr(lang, "close_btn2"))
+        b_close.setObjectName("primary")
+        b_close.clicked.connect(self.accept)
+        row.addWidget(b_copy)
+        row.addWidget(b_show)
+        row.addStretch()
+        row.addWidget(b_close)
+        lay.addLayout(row)
+
+
 class ActivityNavButton(QPushButton):
     """Item "Actividad" del menu: mientras hay una copia en curso se rellena
     de fondo segun el progreso total y muestra el porcentaje."""
@@ -7618,9 +8088,20 @@ class ActivityPage(QWidget):
         self.queue_box = QVBoxLayout()
         self.queue_box.setSpacing(6)
         outer.addLayout(self.queue_box)
+        hist_head = QHBoxLayout()
         self.cap_history = QLabel(tr(lang, "activity_history"))
         self.cap_history.setStyleSheet(cap_style + " margin-top: 10px;")
-        outer.addWidget(self.cap_history)
+        self.btn_clear_history = QPushButton(tr(lang, "history_clear"))
+        self.btn_clear_history.setStyleSheet(
+            "QPushButton { background: rgba(255,255,255,0.08); color: #fff; border: 1px solid rgba(255,255,255,0.14);"
+            " border-radius: 8px; padding: 4px 12px; font-size: 12px; margin-top: 10px; }"
+            " QPushButton:hover { background: rgba(255,255,255,0.16); }")
+        self.btn_clear_history.clicked.connect(self.clear_history)
+        self.btn_clear_history.hide()
+        hist_head.addWidget(self.cap_history)
+        hist_head.addStretch()
+        hist_head.addWidget(self.btn_clear_history)
+        outer.addLayout(hist_head)
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
         self.scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
@@ -7672,8 +8153,18 @@ class ActivityPage(QWidget):
             lay.addWidget(btn)
             self.queue_box.addWidget(row, alignment=Qt.AlignmentFlag.AlignLeft)
 
+    def clear_history(self):
+        for i in reversed(range(self.history.count())):
+            w = self.history.itemAt(i).widget()
+            if w is not None and w is not self.lbl_empty:
+                self.history.takeAt(i)
+                w.deleteLater()
+        self.lbl_empty.show()
+        self.btn_clear_history.hide()
+
     def add_history(self, title, message, info):
         self.lbl_empty.hide()
+        self.btn_clear_history.show()
         card = QFrame()
         card.setStyleSheet("QFrame { background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.10);"
                            " border-radius: 12px; } QLabel { border: none; background: transparent; color: #fff; }"
