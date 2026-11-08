@@ -39,13 +39,13 @@ except ImportError:
 # PySide6
 from PySide6.QtCore import (Qt, QTimer, QThread, Signal, Slot, QRectF, QPointF, QUrl,
                              QPropertyAnimation, QEasingCurve, Property, QEvent, QObject, QSize,
-                             QStandardPaths, QParallelAnimationGroup)
+                             QStandardPaths, QParallelAnimationGroup, QDate)
 from PySide6.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                                QPushButton, QGraphicsDropShadowEffect, QDialog,
                                QStackedWidget, QFrame, QFileDialog, QTabWidget,
                                QGridLayout, QScrollArea, QColorDialog, QGraphicsView, QGraphicsScene, QGraphicsPixmapItem,
                                QSlider, QGraphicsBlurEffect, QMenu, QAbstractButton,
-                               QGraphicsOpacityEffect, QLineEdit, QStackedLayout, QListWidget)
+                               QGraphicsOpacityEffect, QLineEdit, QStackedLayout, QListWidget, QDateEdit)
 from PySide6.QtGui import (QGuiApplication, QPixmap, QPainter, QColor, QPainterPath, QImage, 
                            QLinearGradient, QFont, QKeySequence, QShortcut, QRegion, QPen, QIcon, QImageReader)
 # Multimedia
@@ -288,6 +288,24 @@ TRANSLATIONS = {
         "ps_start_failed": "Konnte PowerShell nicht starten: {e}",
         "sync_failed_detail": "Sync fehlgeschlagen: {detail}",
         "sd_not_readable": "SD-Karte {root} konnte nicht gelesen werden.",
+        "nav_import": "📂  SD / Ordner importieren",
+        "nav_backup": "💾  Auf Laufwerk sichern",
+        "import_title": "SD-Karte oder Ordner zum Importieren wählen",
+        "import_same_as_target": "Du kannst nicht aus dem Zielordner selbst importieren.",
+        "import_searching": "🔎 Suche Bilder und Videos in {folder}...",
+        "busy_wait": "Warte, bis der laufende Vorgang fertig ist.",
+        "date_filter_btn": "📅  {label}",
+        "date_all": "Alle Daten",
+        "date_today": "Heute",
+        "date_7": "Letzte 7 Tage",
+        "date_30": "Letzte 30 Tage",
+        "date_this_year": "Dieses Jahr",
+        "date_custom": "Zeitraum wählen…",
+        "date_range_title": "Nach Datum filtern",
+        "date_from": "Von",
+        "date_to": "Bis",
+        "date_apply": "Anwenden",
+        "date_no_results": "Keine Dateien in diesem Zeitraum.",
         "camera_photo_btn": "🖼  Kamerafoto ändern",
         "camera_photo_title": "Foto deiner Kamera wählen",
         "thumb_cache_label": "Vorschaubild-Cache",
@@ -418,6 +436,24 @@ TRANSLATIONS = {
         "ps_start_failed": "Could not start PowerShell: {e}",
         "sync_failed_detail": "Sync failed: {detail}",
         "sd_not_readable": "Could not read SD card {root}.",
+        "nav_import": "📂  Import SD / folder",
+        "nav_backup": "💾  Back up to drive",
+        "import_title": "Choose an SD card or folder to import",
+        "import_same_as_target": "You can't import from the target folder itself.",
+        "import_searching": "🔎 Looking for pictures and videos in {folder}...",
+        "busy_wait": "Wait for the current operation to finish.",
+        "date_filter_btn": "📅  {label}",
+        "date_all": "All dates",
+        "date_today": "Today",
+        "date_7": "Last 7 days",
+        "date_30": "Last 30 days",
+        "date_this_year": "This year",
+        "date_custom": "Choose range…",
+        "date_range_title": "Filter by date",
+        "date_from": "From",
+        "date_to": "To",
+        "date_apply": "Apply",
+        "date_no_results": "No files in those dates.",
         "camera_photo_btn": "🖼  Change camera photo",
         "camera_photo_title": "Choose a photo of your camera",
         "thumb_cache_label": "Thumbnail cache",
@@ -548,6 +584,24 @@ TRANSLATIONS = {
         "ps_start_failed": "No se pudo iniciar PowerShell: {e}",
         "sync_failed_detail": "Falló la sincronización: {detail}",
         "sd_not_readable": "No se pudo leer la tarjeta SD {root}.",
+        "nav_import": "📂  Importar SD / carpeta",
+        "nav_backup": "💾  Respaldar a disco",
+        "import_title": "Elegir tarjeta SD o carpeta para importar",
+        "import_same_as_target": "No puedes importar desde la propia carpeta de destino.",
+        "import_searching": "🔎 Buscando fotos y videos en {folder}...",
+        "busy_wait": "Espera a que termine la operación en curso.",
+        "date_filter_btn": "📅  {label}",
+        "date_all": "Todas las fechas",
+        "date_today": "Hoy",
+        "date_7": "Últimos 7 días",
+        "date_30": "Últimos 30 días",
+        "date_this_year": "Este año",
+        "date_custom": "Elegir rango…",
+        "date_range_title": "Filtrar por fecha",
+        "date_from": "Desde",
+        "date_to": "Hasta",
+        "date_apply": "Aplicar",
+        "date_no_results": "No hay archivos en esas fechas.",
         "camera_photo_btn": "🖼  Cambiar foto de la cámara",
         "camera_photo_title": "Elegir una foto de tu cámara",
         "thumb_cache_label": "Caché de miniaturas",
@@ -1584,6 +1638,20 @@ def _model_from_version_txt(root):
     for model in GOPRO_MODEL_ORDER:
         if model in cam:
             return model
+    return None
+
+
+def _find_gopro_card_root(folder):
+    """Si 'folder' esta dentro de una tarjeta GoPro (DCIM, 100GOPRO...),
+    devuelve la raiz de la tarjeta (donde esta MISC\\version.txt)."""
+    cur = os.path.abspath(folder)
+    for _ in range(4):
+        if os.path.isfile(os.path.join(cur, "MISC", "version.txt")):
+            return cur
+        parent = os.path.dirname(cur)
+        if parent == cur:
+            break
+        cur = parent
     return None
 
 
@@ -2848,7 +2916,8 @@ class SyncWorkerThread(QThread):
     progress = Signal(int, int, str, float)
     finished_sync = Signal(bool, str, dict)
 
-    def __init__(self, target_dir, delete_after, sync_mode="all", lang="de", sort_into_date_folders=True, parent=None):
+    def __init__(self, target_dir, delete_after, sync_mode="all", lang="de", sort_into_date_folders=True, parent=None,
+                 import_dir=None):
         super().__init__(parent)
         self.target_dir = target_dir
         self.delete_after = delete_after
@@ -2860,6 +2929,16 @@ class SyncWorkerThread(QThread):
         self.sd_root = ACTIVE_SOURCE.get("sd_root")
         self.mvhd_local = bool(GOPRO_MODELS.get(self.model or "", {}).get("mvhd_local"))
         self.device_name = LAST_DEVICE_NAME.get("name")
+        # Importacion manual (menu "Importar SD / carpeta"): fuente elegida por
+        # el usuario; nunca se borra nada del origen.
+        self.import_dir = import_dir
+        if import_dir:
+            self.sd_root = import_dir
+            self.delete_after = False
+            gopro_root = _find_gopro_card_root(import_dir)
+            self.model = _model_from_version_txt(gopro_root) if gopro_root else None
+            self.device_name = LAST_DEVICE_NAME.get("name") if self.model else None
+            self.mvhd_local = bool(GOPRO_MODELS.get(self.model or "", {}).get("mvhd_local"))
 
     # ------------------------------------------------------------------
     # Sincronizacion desde TARJETA SD (lector de tarjetas / unidad normal)
@@ -2870,6 +2949,8 @@ class SyncWorkerThread(QThread):
     # deja en una carpeta YYYY-MM-DD segun la fecha de captura.
 
     def _list_sd_media(self, sd_root, extensions):
+        if self.import_dir:
+            return self._list_any_folder(sd_root, extensions)
         dcim = os.path.join(sd_root, "DCIM")
         exts = tuple(e.lower() for e in extensions)
         found = []
@@ -2920,6 +3001,25 @@ class SyncWorkerThread(QThread):
         if dt is None:
             dt = get_media_capture_date(path, mvhd_local=self.mvhd_local)
         return dt
+
+    def _list_any_folder(self, root_dir, extensions):
+        """Importacion manual: busca medios en toda la carpeta (tarjeta SD,
+        DCIM, o una carpeta cualquiera), sin exigir la estructura de GoPro."""
+        exts = tuple(e.lower() for e in extensions)
+        found = []
+        if not os.path.isdir(root_dir):
+            return None
+        for root, dirs, names in os.walk(root_dir):
+            dirs[:] = sorted(d for d in dirs if not d.startswith((".", "$")) and d.upper() != "SYSTEM VOLUME INFORMATION")
+            for n in sorted(names):
+                if n.startswith(".") or not n.lower().endswith(exts):
+                    continue
+                full = os.path.join(root, n)
+                try:
+                    found.append((full, n, os.path.getsize(full)))
+                except OSError:
+                    continue
+        return found
 
     @staticmethod
     def _sd_aux_files(src):
@@ -4295,6 +4395,24 @@ def move_thumb_cache(old_dir, new_dir):
 _DISK_LOCK = threading.Lock()
 
 
+def _trim_black_bars(img):
+    """La miniatura EXIF de GoPro es 4:3 con bandas negras arriba/abajo
+    (la foto es mas panoramica): se recortan."""
+    h, w = img.height(), img.width()
+
+    def dark(y):
+        return all(QColor(img.pixel(x, y)).lightness() < 18 for x in range(0, w, max(1, w // 16)))
+    top = 0
+    while top < h // 3 and dark(top):
+        top += 1
+    bottom = h - 1
+    while bottom > h * 2 // 3 and dark(bottom):
+        bottom -= 1
+    if top == 0 and bottom == h - 1:
+        return img
+    return img.copy(0, top, w, bottom - top + 1)
+
+
 def read_exif_thumbnail(path, max_bytes=64 * 1024):
     """Miniatura JPEG incrustada en el EXIF (las GoPro la guardan). Solo lee
     el principio del archivo (unos KB), no la foto entera de varios MB."""
@@ -4329,7 +4447,7 @@ def read_exif_thumbnail(path, max_bytes=64 * 1024):
                         length = val
                 if off and length:
                     img = QImage.fromData(tiff[off:off + length])
-                    return None if img.isNull() else img
+                    return None if img.isNull() else _trim_black_bars(img)
                 return None
             if marker in (0xDA, 0xD9):
                 return None
@@ -4844,6 +4962,17 @@ class GalleryBase(QWidget):
             }
         """)
         self.btn_sort.clicked.connect(self._show_sort_menu)
+
+        # Filtro por fecha: (desde, hasta) como "AAAA-MM-DD" inclusive, o None
+        self.date_filter = None
+        self._date_filter_key = "date_all"
+        self.btn_date = QPushButton()
+        self.btn_date.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_date.setStyleSheet(self.btn_sort.styleSheet())
+        self.btn_date.clicked.connect(self._show_date_menu)
+        header_row.addWidget(self.btn_date)
+        self._update_date_button_text()
+
         header_row.addWidget(self.btn_sort)
         self._update_sort_button_text()
 
@@ -4918,6 +5047,78 @@ class GalleryBase(QWidget):
         self.scroll.hide()
         self.empty_lbl.show()
 
+    def _update_date_button_text(self, label=None):
+        if label is None:
+            label = tr(self.lang, self._date_filter_key) if self._date_filter_key else ""
+        self._date_label = label
+        self.btn_date.setText(tr(self.lang, "date_filter_btn", label=label))
+
+    def _available_years(self):
+        years = set()
+        try:
+            for name in os.listdir(self.folder):
+                if re.match(r"^\d{4}-\d{2}-\d{2}$", name):
+                    years.add(name[:4])
+        except Exception:
+            pass
+        return sorted(years, reverse=True)
+
+    def _set_date_filter(self, rng, key=None, label=None):
+        self.date_filter = rng
+        self._date_filter_key = key
+        self._update_date_button_text(label)
+        self.refresh()
+
+    def _show_date_menu(self):
+        today = datetime.now().date()
+        fmt = lambda d: d.strftime("%Y-%m-%d")
+        menu = QMenu(self)
+        menu.addAction(tr(self.lang, "date_all"), lambda: self._set_date_filter(None, "date_all"))
+        menu.addAction(tr(self.lang, "date_today"), lambda: self._set_date_filter((fmt(today), fmt(today)), "date_today"))
+        menu.addAction(tr(self.lang, "date_7"),
+                       lambda: self._set_date_filter((fmt(today - timedelta(days=6)), fmt(today)), "date_7"))
+        menu.addAction(tr(self.lang, "date_30"),
+                       lambda: self._set_date_filter((fmt(today - timedelta(days=29)), fmt(today)), "date_30"))
+        menu.addAction(tr(self.lang, "date_this_year"),
+                       lambda: self._set_date_filter((f"{today.year}-01-01", f"{today.year}-12-31"), "date_this_year"))
+        years = self._available_years()
+        if years:
+            menu.addSeparator()
+            for y in years:
+                menu.addAction(y, lambda y=y: self._set_date_filter((f"{y}-01-01", f"{y}-12-31"), None, y))
+        menu.addSeparator()
+        menu.addAction(tr(self.lang, "date_custom"), self._pick_date_range)
+        menu.exec(self.btn_date.mapToGlobal(self.btn_date.rect().bottomLeft()))
+
+    def _pick_date_range(self):
+        dlg = QDialog(self)
+        dlg.setWindowTitle(tr(self.lang, "date_range_title"))
+        dlg.setStyleSheet("QDialog { background: #1c1e29; } QLabel { color: #fff; }")
+        lay = QVBoxLayout(dlg)
+        row = QHBoxLayout()
+        start = self.date_filter[0] if self.date_filter else datetime.now().strftime("%Y-01-01")
+        end = self.date_filter[1] if self.date_filter else datetime.now().strftime("%Y-%m-%d")
+        d_from = QDateEdit(QDate.fromString(start, "yyyy-MM-dd"))
+        d_to = QDateEdit(QDate.fromString(end, "yyyy-MM-dd"))
+        for w in (d_from, d_to):
+            w.setCalendarPopup(True)
+            w.setDisplayFormat("dd/MM/yyyy")
+        row.addWidget(QLabel(tr(self.lang, "date_from")))
+        row.addWidget(d_from)
+        row.addWidget(QLabel(tr(self.lang, "date_to")))
+        row.addWidget(d_to)
+        lay.addLayout(row)
+        ok = QPushButton(tr(self.lang, "date_apply"))
+        ok.clicked.connect(dlg.accept)
+        lay.addWidget(ok, alignment=Qt.AlignmentFlag.AlignRight)
+        if dlg.exec():
+            a, b = d_from.date().toString("yyyy-MM-dd"), d_to.date().toString("yyyy-MM-dd")
+            if a > b:
+                a, b = b, a
+            label = f"{d_from.date().toString('dd/MM/yyyy')} – {d_to.date().toString('dd/MM/yyyy')}" \
+                if a <= b else ""
+            self._set_date_filter((a, b), None, label)
+
     def _mtime_for_path(self, path):
         try:
             return os.path.getmtime(path)
@@ -4951,6 +5152,9 @@ class GalleryBase(QWidget):
                         results.append(os.path.join(root, f))
         except Exception:
             return []
+        if self.date_filter:
+            lo, hi = self.date_filter
+            results = [p for p in results if lo <= self._date_for_path(p) <= hi]
         # Zuerst nach dem Datums-Ordner sortieren (derselbe Wert, der auch
         # fuer die "Heute"/"Gestern"-Gruppenkoepfe verwendet wird), erst
         # danach nach mtime als Fein-Sortierung INNERHALB eines Tages.
@@ -4972,6 +5176,8 @@ class GalleryBase(QWidget):
 
         if not files:
             self.show_empty()
+            if self.date_filter:
+                self.empty_lbl.setText(f"📅\n{tr(self.lang, 'date_no_results')}")
             return
 
         self.scroll.show()
@@ -5744,6 +5950,30 @@ class SyncTabWidget(QWidget):
         self.config["delete_after_sync"] = bool(state)
         save_config(self.config)
 
+    def _busy(self):
+        return any(getattr(self, attr, None) is not None and getattr(self, attr).isRunning()
+                   for attr in ("sync_worker", "backup_worker"))
+
+    def start_import(self, folder):
+        """Importa desde una carpeta o tarjeta elegida a mano (no hace falta
+        tener la camara conectada)."""
+        if self._busy():
+            show_toast(self, tr(self.lang, "busy_wait"))
+            return
+        if _is_same_or_inside(folder, self.sync_target_dir) or _is_same_or_inside(self.sync_target_dir, folder):
+            show_toast(self, tr(self.lang, "import_same_as_target"))
+            return
+        self.btn_sync.start_sync_visual()
+        self.sync_popup.setText(tr(self.lang, "import_searching", folder=folder))
+        self.sync_popup.show()
+        self.sync_worker = SyncWorkerThread(
+            self.sync_target_dir, False, "all", self.lang,
+            self.config.get("sort_into_date_folders", True), self, import_dir=folder
+        )
+        self.sync_worker.progress.connect(self.on_sync_progress)
+        self.sync_worker.finished_sync.connect(self.on_sync_done)
+        self.sync_worker.start()
+
     def start_sync(self, mode="all"):
         if not self.gopro_connected:
             return
@@ -5798,9 +6028,8 @@ class SyncTabWidget(QWidget):
 
     def start_backup(self):
         """Copia el destino local a los discos de respaldo configurados."""
-        if getattr(self, "backup_worker", None) is not None and self.backup_worker.isRunning():
-            return
-        if getattr(self, "sync_worker", None) is not None and self.sync_worker.isRunning():
+        if self._busy():
+            show_toast(self, tr(self.lang, "busy_wait"))
             return
         dirs = self.config.get("backup_dirs") or []
         if not dirs:
@@ -7185,6 +7414,21 @@ class MainWindow(QWidget):
         sidebar_layout.addWidget(self.btn_nav_videos)
         sidebar_layout.addWidget(self.btn_nav_pictures)
         sidebar_layout.addStretch()
+
+        # Acciones siempre disponibles (con o sin camara conectada)
+        action_style = (
+            "QPushButton { background-color: transparent; font-size: 13px; font-weight: 600; "
+            "text-align: left; padding: 9px 14px; color: rgba(255,255,255,0.75); border-radius: 10px; border: none; } "
+            "QPushButton:hover { color: #fff; background-color: rgba(255,255,255,0.08); }"
+        )
+        self.btn_import = QPushButton(tr(self.lang, "nav_import"))
+        self.btn_import.setStyleSheet(action_style)
+        self.btn_import.clicked.connect(self.import_from_folder)
+        self.btn_backup = QPushButton(tr(self.lang, "nav_backup"))
+        self.btn_backup.setStyleSheet(action_style)
+        self.btn_backup.clicked.connect(self.backup_from_menu)
+        sidebar_layout.addWidget(self.btn_import)
+        sidebar_layout.addWidget(self.btn_backup)
         sidebar_layout.addSpacing(6)
 
         self.btn_settings = QPushButton(tr(self.lang, "nav_settings"))
@@ -7390,6 +7634,31 @@ class MainWindow(QWidget):
         self.sync_page.lang = new_lang
         self.retranslate_ui()
 
+    def _go_to_sync_page(self):
+        self.switch_page(0, self.btn_nav_sync)
+
+    def import_from_folder(self):
+        folder = QFileDialog.getExistingDirectory(self, tr(self.lang, "import_title"), _safe_local_dir())
+        if not folder:
+            return
+        self._go_to_sync_page()
+        self.sync_page.start_import(os.path.normpath(folder))
+
+    def backup_from_menu(self):
+        """Respaldar ya; si no hay discos configurados, elegir uno primero."""
+        if not self.config.get("backup_dirs"):
+            new_dir = QFileDialog.getExistingDirectory(self, tr(self.lang, "backup_choose_title"), _safe_local_dir())
+            if not new_dir:
+                return
+            new_dir = os.path.normpath(new_dir)
+            if _is_same_or_inside(new_dir, self.config.get("target_dir", "")):
+                show_toast(self, tr(self.lang, "backup_same_as_target"))
+                return
+            self.config["backup_dirs"] = [new_dir]
+            save_config(self.config)
+        self._go_to_sync_page()
+        self.sync_page.start_backup()
+
     def choose_language(self, new_lang):
         """Guarda el idioma elegido (asistente/dialogo) y traduce la app al momento."""
         if new_lang not in SUPPORTED_LANGUAGES:
@@ -7414,6 +7683,8 @@ class MainWindow(QWidget):
         self.btn_nav_sync.setText(tr(self.lang, "nav_sync"))
         self.btn_nav_videos.setText(tr(self.lang, "nav_videos"))
         self.btn_nav_pictures.setText(tr(self.lang, "nav_pictures"))
+        self.btn_import.setText(tr(self.lang, "nav_import"))
+        self.btn_backup.setText(tr(self.lang, "nav_backup"))
         self.btn_settings.setText(tr(self.lang, "nav_settings"))
 
         sp = self.sync_page
