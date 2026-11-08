@@ -1,3 +1,16 @@
+> ## 🇺🇾 Fork de Lapo26: soporte HERO5, tarjeta SD y respaldos
+>
+> Este fork extiende el proyecto original de [@JelloC19](https://github.com/JelloC19) para reemplazar a GoPro Quik for desktop:
+>
+> - **GoPro HERO5** (Black/Session) por USB/MTP, con la fecha de los videos corregida (la HERO5 guarda hora local).
+> - **Sincronización desde la tarjeta microSD** con lector de tarjetas: copia directa, conservando las fechas de creación y modificación, ordenada en carpetas `AAAA-MM-DD` como Quik.
+> - **Respaldo incremental a discos externos** (uno o varios), que nunca borra nada en el destino.
+> - **Rendimiento**: caché de miniaturas, detección con un PowerShell persistente, menos sondeo en segundo plano. También se limpió el código sin uso.
+>
+> Detalles y uso: [`GoPro Sync Version 0.5/README.md`](GoPro%20Sync%20Version%200.5/README.md)
+
+---
+
 
 <img width="600" height="337" alt="GoProSyncDemo1-ezgif com-video-to-gif-converter (3)" src="https://github.com/user-attachments/assets/d129b235-fe8d-48d2-8e65-d0cca5bd21e4" />
 
