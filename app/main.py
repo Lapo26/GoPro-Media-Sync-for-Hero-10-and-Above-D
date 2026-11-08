@@ -9643,10 +9643,7 @@ class MainWindow(QWidget):
             self.sync_page.monitor_thread.connection_changed.disconnect(self.show_from_background_on_connect)
         except Exception:
             pass
-        self.show()
-        self.showNormal()
-        self.activateWindow()
-        self.raise_()
+        bring_to_front(self)
 
     def switch_page(self, idx, btn):
         self.pages.setCurrentIndex(idx)
@@ -9713,6 +9710,44 @@ class AnimatedSplash(QWidget):
         painter.drawArc(cx - r, cy - r, r * 2, r * 2, -self.angle * 16, 120 * 16)
 
 
+def bring_to_front(window):
+    """Muestra la ventana y le da el foco de verdad. Windows no deja que una
+    app se ponga al frente si otra tiene el foco (y al cerrarse la pantalla
+    de carga se lo devolvia a la ventana anterior): se usa AttachThreadInput
+    para que SetForegroundWindow funcione."""
+    window.show()
+    window.setWindowState((window.windowState() & ~Qt.WindowState.WindowMinimized) | Qt.WindowState.WindowActive)
+    window.raise_()
+    window.activateWindow()
+    if os.name != "nt":
+        return
+    try:
+        u32 = ctypes.windll.user32
+        k32 = ctypes.windll.kernel32
+        hwnd = int(window.winId())
+        fg = u32.GetForegroundWindow()
+        fg_thread = u32.GetWindowThreadProcessId(fg, None) if fg else 0
+        me = k32.GetCurrentThreadId()
+        attached = bool(fg_thread and fg_thread != me and u32.AttachThreadInput(fg_thread, me, True))
+        try:
+            u32.ShowWindow(hwnd, 9)          # SW_RESTORE
+            u32.BringWindowToTop(hwnd)
+            u32.SetForegroundWindow(hwnd)
+        finally:
+            if attached:
+                u32.AttachThreadInput(fg_thread, me, False)
+        if u32.GetForegroundWindow() != hwnd:
+            # Si Windows sigue bloqueando el cambio de foco (la app la abrio
+            # otro proceso en segundo plano), una pulsacion de Alt cuenta como
+            # interaccion del usuario y habilita SetForegroundWindow.
+            VK_MENU, KEYUP = 0x12, 0x0002
+            u32.keybd_event(VK_MENU, 0, 0, 0)
+            u32.SetForegroundWindow(hwnd)
+            u32.keybd_event(VK_MENU, 0, KEYUP, 0)
+    except Exception:
+        pass
+
+
 def main():
     minimize_own_console()
     app = QApplication(sys.argv)
@@ -9763,9 +9798,13 @@ def main():
         build_ms = (time.monotonic() - start_time) * 1000
 
         def _reveal_main_window():
-            window.show()
+            # Primero la ventana al frente y DESPUES cerrar la pantalla de
+            # carga: si no, Windows devolvia el foco a la ventana anterior y
+            # la app quedaba en segundo plano.
+            bring_to_front(window)
             splash.timer.stop()
             splash.close()
+            QTimer.singleShot(150, lambda: bring_to_front(window))
             # FIX: Startet die Abfrage der GoPro erst HIER.
             # Dadurch triggert das Video garantiert erst, wenn die UI da ist!
             # Laeuft der Einrichtungsassistent noch (erster Start), wird das
