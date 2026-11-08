@@ -290,6 +290,11 @@ TRANSLATIONS = {
         "ps_start_failed": "Konnte PowerShell nicht starten: {e}",
         "sync_failed_detail": "Sync fehlgeschlagen: {detail}",
         "sd_not_readable": "SD-Karte {root} konnte nicht gelesen werden.",
+        "busy_syncing": "Synchronisiere",
+        "busy_importing": "Importiere",
+        "sync_title_import_from": "Importiere aus {folder}",
+        "sync_queue": "In Warteschlange: {n}",
+        "import_queued": "Zur Warteschlange hinzugefügt: {folder}",
         "sync_title_camera": "Synchronisiere {device}",
         "sync_title_import": "Bilder und Videos importieren",
         "sync_phase_searching": "Suche Bilder und Videos…",
@@ -299,7 +304,6 @@ TRANSLATIONS = {
         "sync_current_file": "Aktuelle Datei",
         "sync_cancelling": "Wird abgebrochen… (aktuelle Datei wird beendet)",
         "sync_cancelled_msg": "Abgebrochen: {copied} von {total} Dateien fertig. Auf der Kamera wurde nichts gelöscht.",
-        "sync_hide_btn": "Im Hintergrund weiterlaufen",
         "video_damaged": "Video beschädigt",
         "backup_dialog_title": "Auf Laufwerk sichern",
         "backup_from": "Zu sichernder Ordner",
@@ -473,6 +477,11 @@ TRANSLATIONS = {
         "ps_start_failed": "Could not start PowerShell: {e}",
         "sync_failed_detail": "Sync failed: {detail}",
         "sd_not_readable": "Could not read SD card {root}.",
+        "busy_syncing": "Syncing",
+        "busy_importing": "Importing",
+        "sync_title_import_from": "Importing from {folder}",
+        "sync_queue": "Queued: {n}",
+        "import_queued": "Added to the queue: {folder}",
         "sync_title_camera": "Syncing {device}",
         "sync_title_import": "Importing pictures and videos",
         "sync_phase_searching": "Looking for pictures and videos…",
@@ -482,7 +491,6 @@ TRANSLATIONS = {
         "sync_current_file": "Current file",
         "sync_cancelling": "Cancelling… (finishing the current file)",
         "sync_cancelled_msg": "Cancelled: {copied} of {total} files done. Nothing was deleted from the camera.",
-        "sync_hide_btn": "Keep running in background",
         "video_damaged": "Damaged video",
         "backup_dialog_title": "Back up to drive",
         "backup_from": "Folder to back up",
@@ -656,6 +664,11 @@ TRANSLATIONS = {
         "ps_start_failed": "No se pudo iniciar PowerShell: {e}",
         "sync_failed_detail": "Falló la sincronización: {detail}",
         "sd_not_readable": "No se pudo leer la tarjeta SD {root}.",
+        "busy_syncing": "Sincronizando",
+        "busy_importing": "Importando",
+        "sync_title_import_from": "Importando desde {folder}",
+        "sync_queue": "En cola: {n}",
+        "import_queued": "Agregado a la cola: {folder}",
         "sync_title_camera": "Sincronizando {device}",
         "sync_title_import": "Importando fotos y videos",
         "sync_phase_searching": "Buscando fotos y videos…",
@@ -665,7 +678,6 @@ TRANSLATIONS = {
         "sync_current_file": "Archivo actual",
         "sync_cancelling": "Cancelando… (terminando el archivo en curso)",
         "sync_cancelled_msg": "Cancelado: {copied} de {total} archivos listos. No se borró nada de la cámara.",
-        "sync_hide_btn": "Seguir en segundo plano",
         "video_damaged": "Video dañado",
         "backup_dialog_title": "Respaldar a disco",
         "backup_from": "Carpeta a respaldar",
@@ -4507,6 +4519,8 @@ class SyncProgressButton(QWidget):
             painter.setPen(QColor("#ffffff"))
             painter.setFont(QFont("Segoe UI", 13, QFont.Weight.Bold))
             pct_text = f"{int(round(self._display_progress))}%"
+            if getattr(self, "busy_label", ""):
+                pct_text = f"{self.busy_label}  {pct_text}"
             painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, pct_text)
         else:
             if self._clickable:
@@ -5997,6 +6011,12 @@ class SyncTabWidget(QWidget):
         self.btn_sync.progress_requested.connect(self.show_progress)
         layout.addWidget(self.btn_sync, alignment=Qt.AlignmentFlag.AlignCenter)
 
+        # Progreso integrado (sincronizar / importar) + cola de importaciones
+        self.progress_panel = SyncProgressPanel(self.lang, self.get_theme_color())
+        self.progress_panel.cancel_requested.connect(self.cancel_sync)
+        layout.addWidget(self.progress_panel, alignment=Qt.AlignmentFlag.AlignCenter)
+        self._import_queue = []
+
         self.sync_popup = QLabel("")
         self.sync_popup.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.sync_popup.setStyleSheet("""
@@ -6212,20 +6232,19 @@ class SyncTabWidget(QWidget):
                    for attr in ("sync_worker", "backup_worker"))
 
     def _open_progress(self, title):
-        if getattr(self, "progress_dialog", None) is not None:
-            self.progress_dialog.done = True
-            self.progress_dialog.close()
-        self.progress_dialog = SyncProgressDialog(self.window(), self.lang, title,
-                                                  self.config.get("accent_color", "#00f2fe"))
-        self.progress_dialog.attach(self.sync_worker)
-        self.progress_dialog.show()
+        self.sync_popup.hide()   # el panel ya lo muestra todo
+        self.progress_panel.start(title, self.sync_worker, queued=len(self._import_queue))
 
     def show_progress(self):
-        """Volver a mostrar la ventana de progreso (p. ej. tras ocultarla)."""
-        dlg = getattr(self, "progress_dialog", None)
-        if dlg is not None:
-            dlg.show()
-            dlg.raise_()
+        self.progress_panel.show()
+
+    def cancel_sync(self):
+        """Cancelar: detiene la copia en curso y vacia la cola de importaciones."""
+        self._import_queue.clear()
+        self.progress_panel.set_queue(0)
+        worker = getattr(self, "sync_worker", None)
+        if worker is not None and worker.isRunning():
+            worker.cancel()
 
     def start_import(self, folder, target=None):
         """Importa desde una carpeta o tarjeta elegida a mano (no hace falta
@@ -6233,7 +6252,10 @@ class SyncTabWidget(QWidget):
         esta importacion."""
         target = target or self.sync_target_dir
         if self._busy():
-            show_toast(self, tr(self.lang, "busy_wait"))
+            # Ya hay algo copiandose: se agrega a la cola y empieza solo al terminar.
+            self._import_queue.append((folder, target))
+            self.progress_panel.set_queue(len(self._import_queue))
+            show_toast(self, tr(self.lang, "import_queued", folder=folder))
             return
         if _is_same_or_inside(folder, target) or _is_same_or_inside(target, folder):
             show_toast(self, tr(self.lang, "import_same_as_target"))
@@ -6247,7 +6269,8 @@ class SyncTabWidget(QWidget):
         )
         self.sync_worker.progress.connect(self.on_sync_progress)
         self.sync_worker.finished_sync.connect(self.on_sync_done)
-        self._open_progress(tr(self.lang, "sync_title_import"))
+        self.btn_sync.busy_label = tr(self.lang, "busy_importing")
+        self._open_progress(tr(self.lang, "sync_title_import_from", folder=folder))
         self.sync_worker.start()
 
     def start_sync(self, mode="all"):
@@ -6273,27 +6296,35 @@ class SyncTabWidget(QWidget):
         self.sync_worker.progress.connect(self.on_sync_progress)
         self.sync_worker.finished_sync.connect(self.on_sync_done)
         device = LAST_DEVICE_NAME.get("name") or GOPRO_MODELS.get(self._current_model or "", {}).get("display", "GoPro")
+        self.btn_sync.busy_label = tr(self.lang, "busy_syncing")
         self._open_progress(tr(self.lang, "sync_title_camera", device=device))
         self.sync_worker.start()
 
     @Slot(int, int, str, float)
     def on_sync_progress(self, current, total, name, file_pct):
+        if not name.startswith("__CLEANUP__") and self.progress_panel.sizes:
+            # El boton muestra el progreso TOTAL (no el del archivo, que vuelve a 0 con cada uno)
+            # sin animacion: llegan muchas actualizaciones por segundo y la
+            # animacion reiniciada en cada una dejaba el boton atrasado
+            self.btn_sync.set_progress(self.progress_panel.total_percent(current, file_pct), animate=False)
+            return
         # Bei 0% (= neue Datei faengt gerade an) den Balken HART zuruecksetzen
         # statt von der vorherigen Datei aus "runter" zu animieren - jede
         # Datei bekommt so sichtbar ihren eigenen, frischen Balken. Alle
         # weiteren Updates derselben Datei werden weich animiert.
         self.btn_sync.set_progress(file_pct, animate=(file_pct > 0.0))
-        if name.startswith("__CLEANUP__"):
-            self.sync_popup.setText(f"🧹 {name[len('__CLEANUP__'):]}")
-        else:
-            self.sync_popup.setText(tr(self.lang, "transferring", current=current, total=total, name=name))
-        self.sync_popup.show()
 
     @Slot(bool, str, dict)
     def on_sync_done(self, success, message, stats):
         self.btn_sync.set_idle(self.gopro_connected)
-        self.sync_popup.setText(message)
-        self.sync_popup.show()
+        # El resultado queda en el panel de progreso. Si hay importaciones en
+        # cola, sigue con la proxima.
+        if self._import_queue and not stats.get("cancelled"):
+            folder, target = self._import_queue.pop(0)
+            if stats.get("copied", 0) > 0:
+                self.sync_finished.emit()
+            QTimer.singleShot(400, lambda: self.start_import(folder, target))
+            return
         if stats.get("copied", 0) > 0:
             SoundManager.play_finish()
         self.sync_finished.emit()
@@ -6301,8 +6332,6 @@ class SyncTabWidget(QWidget):
                 and self.config.get("backup_dirs")):
             # Mostrar unos segundos el resultado del sync antes del respaldo.
             QTimer.singleShot(2500, self.start_backup)
-        else:
-            QTimer.singleShot(8000, self._hide_sync_popup)
 
     def start_backup(self):
         """Copia el destino local a los discos de respaldo configurados."""
@@ -7039,106 +7068,118 @@ def _fmt_eta(seconds):
     return f"{seconds // 3600} h {seconds % 3600 // 60:02d} min"
 
 
-class SyncProgressDialog(QDialog):
-    """Progreso de sincronizacion/importacion: que esta haciendo, progreso
-    TOTAL (archivos y bytes, velocidad, tiempo restante), progreso del
-    archivo actual y boton para cancelar."""
+class SyncProgressPanel(QFrame):
+    """Progreso de sincronizacion/importacion INTEGRADO en la pantalla
+    principal (debajo del boton): fase y total, barra total, archivo actual
+    con velocidad/tiempo restante, barra por archivo y Cancelar. Al terminar
+    muestra el resultado hasta que se cierra."""
+    cancel_requested = Signal()
 
-    def __init__(self, parent, lang, title, accent):
+    def __init__(self, lang, accent, parent=None):
         super().__init__(parent)
         self.lang = lang
-        self.worker = None
         self.sizes = []
         self.total_bytes = 0
-        self.done = False
-        self._t0 = None
-        self._samples = []      # (tiempo, bytes) para velocidad media movil
-        self.setWindowTitle(title)
-        self.setModal(False)
-        self.setMinimumWidth(560)
+        self._samples = []
+        self.setObjectName("syncPanel")
+        self.setFixedWidth(560)
         self.setStyleSheet(f"""
-            QDialog {{ background: #1c1e29; }}
-            QLabel {{ color: #fff; background: transparent; }}
-            * {{ font-family: {FONT_STACK}; }}
+            QFrame#syncPanel {{ background: rgba(255,255,255,0.05); border: 1px solid rgba(255,255,255,0.12);
+                               border-radius: 14px; }}
+            QLabel {{ color: #fff; background: transparent; border: none; }}
             QPushButton {{ background: rgba(255,255,255,0.08); color: #fff; border: 1px solid rgba(255,255,255,0.14);
-                          border-radius: 10px; padding: 8px 16px; font-weight: 600; }}
+                          border-radius: 9px; padding: 5px 14px; font-weight: 600; font-size: 12px; }}
             QPushButton:hover {{ background: rgba(255,255,255,0.16); }}
-            QPushButton#primary {{ background: {accent}; color: #0d0d12; border: none; font-weight: 800; }}
-            QProgressBar {{ background: rgba(255,255,255,0.08); border: none; border-radius: 7px; }}
-            QProgressBar::chunk {{ background: {accent}; border-radius: 7px; }}
-            QProgressBar#file::chunk {{ background: rgba(255,255,255,0.55); }}
+            QProgressBar {{ background: rgba(255,255,255,0.08); border: none; border-radius: 5px; }}
+            QProgressBar::chunk {{ background: {accent}; border-radius: 5px; }}
+            QProgressBar#file::chunk {{ background: rgba(255,255,255,0.5); }}
         """)
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(26, 22, 26, 20)
-        lay.setSpacing(8)
-        t = QLabel(title)
-        t.setStyleSheet("font-size: 19px; font-weight: 800;")
-        lay.addWidget(t)
-        self.lbl_phase = QLabel(tr(lang, "sync_phase_searching"))
-        self.lbl_phase.setStyleSheet("font-size: 13px; color: rgba(255,255,255,0.6);")
-        lay.addWidget(self.lbl_phase)
-        lay.addSpacing(6)
+        lay.setContentsMargins(16, 12, 16, 12)
+        lay.setSpacing(6)
 
-        self.lbl_total = QLabel(" ")
-        self.lbl_total.setStyleSheet("font-size: 15px; font-weight: 700;")
+        row1 = QHBoxLayout()
+        self.lbl_phase = QLabel()
+        self.lbl_phase.setStyleSheet("font-size: 13px; font-weight: 800;")
+        self.lbl_total = QLabel()
+        self.lbl_total.setStyleSheet("font-size: 12px; color: rgba(255,255,255,0.8);")
+        row1.addWidget(self.lbl_phase)
+        row1.addStretch()
+        row1.addWidget(self.lbl_total)
+        lay.addLayout(row1)
+
         self.bar_total = QProgressBar()
-        self.bar_total.setRange(0, 0)          # indeterminada mientras busca
         self.bar_total.setTextVisible(False)
-        self.bar_total.setFixedHeight(14)
-        self.lbl_speed = QLabel(" ")
-        self.lbl_speed.setStyleSheet("font-size: 12px; color: rgba(255,255,255,0.55);")
-        lay.addWidget(self.lbl_total)
+        self.bar_total.setFixedHeight(10)
         lay.addWidget(self.bar_total)
-        lay.addWidget(self.lbl_speed)
-        lay.addSpacing(10)
 
-        cap = QLabel(tr(lang, "sync_current_file"))
-        cap.setStyleSheet("font-size: 11px; font-weight: 800; color: rgba(255,255,255,0.45); letter-spacing: 1px;")
-        self.lbl_file = QLabel(" ")
-        self.lbl_file.setStyleSheet("font-size: 13px;")
+        row2 = QHBoxLayout()
+        self.lbl_file = QLabel()
+        self.lbl_file.setStyleSheet("font-size: 12px; color: rgba(255,255,255,0.7);")
+        self.lbl_speed = QLabel()
+        self.lbl_speed.setStyleSheet("font-size: 12px; color: rgba(255,255,255,0.55);")
+        row2.addWidget(self.lbl_file)
+        row2.addStretch()
+        row2.addWidget(self.lbl_speed)
+        lay.addLayout(row2)
+
         self.bar_file = QProgressBar()
         self.bar_file.setObjectName("file")
         self.bar_file.setRange(0, 1000)
         self.bar_file.setTextVisible(False)
-        self.bar_file.setFixedHeight(8)
-        lay.addWidget(cap)
-        lay.addWidget(self.lbl_file)
+        self.bar_file.setFixedHeight(5)
         lay.addWidget(self.bar_file)
 
-        self.lbl_result = QLabel("")
+        row3 = QHBoxLayout()
+        self.lbl_result = QLabel()
         self.lbl_result.setWordWrap(True)
-        self.lbl_result.setStyleSheet("font-size: 13px; margin-top: 8px;")
-        lay.addWidget(self.lbl_result)
-
-        row = QHBoxLayout()
-        self.btn_hide = QPushButton(tr(lang, "sync_hide_btn"))
-        self.btn_hide.clicked.connect(self.hide)
+        self.lbl_result.setStyleSheet("font-size: 12px;")
+        self.lbl_queue = QLabel()
+        self.lbl_queue.setStyleSheet("font-size: 12px; color: rgba(255,255,255,0.6);")
         self.btn_cancel = QPushButton(tr(lang, "cancel_btn"))
         self.btn_cancel.clicked.connect(self._cancel)
-        self.btn_close = QPushButton(tr(lang, "close_btn2"))
-        self.btn_close.setObjectName("primary")
-        self.btn_close.clicked.connect(self.close)
-        self.btn_close.hide()
-        row.addWidget(self.btn_hide)
-        row.addStretch()
-        row.addWidget(self.btn_cancel)
-        row.addWidget(self.btn_close)
-        lay.addLayout(row)
+        self.btn_close = QPushButton("✕")
+        self.btn_close.setFixedWidth(36)
+        self.btn_close.clicked.connect(self.hide)
+        row3.addWidget(self.lbl_result, 1)
+        row3.addWidget(self.lbl_queue)
+        row3.addWidget(self.btn_cancel)
+        row3.addWidget(self.btn_close)
+        lay.addLayout(row3)
+        self.hide()
 
-    def attach(self, worker):
-        self.worker = worker
+    # ---- ciclo de vida
+    def start(self, title, worker, queued=0):
+        self.sizes = []
+        self.total_bytes = 0
+        self._samples = []
+        self.lbl_phase.setText(self.lbl_phase.fontMetrics().elidedText(title, Qt.TextElideMode.ElideMiddle, 300))
+        self.lbl_phase.setToolTip(title)
+        self.lbl_total.setText(tr(self.lang, "sync_phase_searching"))
+        self.bar_total.setRange(0, 0)           # indeterminada mientras busca
+        self.lbl_file.setText(" ")
+        self.lbl_speed.setText(" ")
+        self.bar_file.setValue(0)
+        self.bar_file.show()
+        self.lbl_result.setText("")
+        self.set_queue(queued)
+        self.btn_cancel.setEnabled(True)
+        self.btn_cancel.show()
+        self.btn_close.hide()
         worker.plan.connect(self.set_plan)
         worker.progress.connect(self.on_progress)
         worker.finished_sync.connect(self.on_finished)
+        self.show()
+
+    def set_queue(self, n):
+        self.lbl_queue.setText(tr(self.lang, "sync_queue", n=n) if n else "")
 
     def set_plan(self, sizes):
         self.sizes = [int(x or 0) for x in sizes]
         self.total_bytes = max(1, sum(self.sizes))
         self.bar_total.setRange(0, 1000)
         self.bar_total.setValue(0)
-        self.lbl_phase.setText(tr(self.lang, "sync_phase_copying"))
-        self._t0 = time.monotonic()
-        self._samples = [(self._t0, 0)]
+        self._samples = [(time.monotonic(), 0)]
         self._update_total(0, 0.0)
 
     def _update_total(self, idx, pct):
@@ -7161,10 +7202,16 @@ class SyncProgressDialog(QDialog):
             eta = (self.total_bytes - done_bytes) / speed if speed > 0 else 0
             self.lbl_speed.setText(tr(self.lang, "sync_speed_eta", speed=_human_size(speed), eta=_fmt_eta(eta)))
 
+    def total_percent(self, idx, pct):
+        if not self.sizes:
+            return 0.0
+        before = sum(self.sizes[:max(0, idx - 1)])
+        cur = self.sizes[idx - 1] * pct / 100.0 if 0 < idx <= len(self.sizes) else 0
+        return min(100.0, (before + cur) / self.total_bytes * 100.0)
+
     def on_progress(self, idx, total, name, pct):
         if name.startswith("__CLEANUP__"):
-            self.lbl_phase.setText(name[len("__CLEANUP__"):])
-            self.lbl_file.setText(" ")
+            self.lbl_file.setText("🧹 " + name[len("__CLEANUP__"):])
             self.bar_file.setValue(0)
             self.btn_cancel.setEnabled(False)   # el borrado final no se interrumpe a medias
             return
@@ -7174,34 +7221,21 @@ class SyncProgressDialog(QDialog):
         self.bar_file.setValue(int(pct * 10))
 
     def on_finished(self, ok, message, info):
-        self.done = True
-        if not info.get("cancelled") and self.sizes:
+        if self.bar_total.maximum() == 0:
             self.bar_total.setRange(0, 1000)
+        if not info.get("cancelled"):
             self.bar_total.setValue(1000)
-        elif not self.sizes:
-            self.bar_total.setRange(0, 1000)
-        self.lbl_phase.setText(" ")
+        self.lbl_file.setText(" ")
         self.lbl_speed.setText(" ")
+        self.bar_file.hide()
         self.lbl_result.setText(message)
         self.btn_cancel.hide()
-        self.btn_hide.hide()
         self.btn_close.show()
-        self.show()
-        self.raise_()
 
     def _cancel(self):
-        if self.worker is not None and self.worker.isRunning():
-            self.worker.cancel()
-            self.btn_cancel.setEnabled(False)
-            self.lbl_phase.setText(tr(self.lang, "sync_cancelling"))
-
-    def closeEvent(self, event):
-        # Cerrar la ventana mientras copia = seguir en segundo plano.
-        if not self.done:
-            event.ignore()
-            self.hide()
-            return
-        event.accept()
+        self.btn_cancel.setEnabled(False)
+        self.lbl_file.setText(tr(self.lang, "sync_cancelling"))
+        self.cancel_requested.emit()
 
 
 class LanguageDialog(QDialog):
