@@ -4,18 +4,15 @@
   Uso (desde la raiz del repo):
     .\packaging\try.ps1              # compila y abre la app compilada
     .\packaging\try.ps1 -FromSource  # abre directo desde el codigo (mas rapido, sin compilar)
-    .\packaging\try.ps1 -Fresh       # con un perfil limpio temporal (como una instalacion nueva:
-                                     #   asistente, idioma...). No toca tu configuracion real.
 
-  Por defecto usa TU configuracion real (%APPDATA%\GoProSyncPro), asi pruebas con
-  tu carpeta y tu camara. Cierra la GoPro Sync instalada mientras pruebas, para
-  que no haya dos copias a la vez.
+  Usa SIEMPRE tu configuracion real (%APPDATA%\GoProSyncPro): lo que cambies en la
+  version de prueba queda guardado y lo ve tambien la app instalada. Cierra la
+  GoPro Sync instalada mientras pruebas, para que no haya dos copias a la vez.
 
   La primera vez crea un entorno .venv en el repo con las dependencias (unos minutos).
 #>
 param(
     [switch]$FromSource,
-    [switch]$Fresh,
     [string]$Python = ""
 )
 
@@ -41,14 +38,6 @@ $installed = Join-Path $env:LOCALAPPDATA "Programs\GoPro Sync\GoProSync.exe"
 Get-Process GoProSync -ErrorAction SilentlyContinue | Where-Object { $_.Path -eq $installed } | ForEach-Object {
     Write-Host "-> Cerrando la GoPro Sync instalada mientras pruebas" -ForegroundColor Yellow
     Stop-Process -Id $_.Id -Force
-}
-
-# --- perfil limpio opcional ---
-if ($Fresh) {
-    $profileDir = Join-Path $env:TEMP ("GoProSync-prueba-" + (Get-Date -Format "yyyyMMdd-HHmmss"))
-    New-Item -ItemType Directory -Force $profileDir | Out-Null
-    $env:APPDATA = $profileDir
-    Write-Host "-> Perfil limpio temporal: $profileDir" -ForegroundColor Yellow
 }
 
 if ($FromSource) {

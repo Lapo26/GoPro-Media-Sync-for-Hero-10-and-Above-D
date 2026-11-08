@@ -6083,9 +6083,14 @@ def set_autostart(enabled):
         if enabled:
             exe = sys.executable
             script = os.path.abspath(__file__)
+            installed = os.path.join(os.getenv("LOCALAPPDATA") or "", "Programs", "GoPro Sync", "GoProSync.exe")
             if getattr(sys, "frozen", False):
                 # Als .exe gebaut (PyInstaller o.ae.) - kein separates Skript noetig.
                 cmd = f'"{exe}" --silent'
+            elif os.path.exists(installed):
+                # Version de prueba (desde el codigo): el inicio con Windows
+                # debe abrir la app INSTALADA, no el codigo ni un Python temporal.
+                cmd = f'"{installed}" --silent'
             else:
                 cmd = f'"{exe}" "{script}" --silent'
             winreg.SetValueEx(key, "GoProSyncPro", 0, winreg.REG_SZ, cmd)

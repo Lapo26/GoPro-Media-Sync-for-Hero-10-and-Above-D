@@ -54,13 +54,12 @@ release.ps1          publica una versión nueva
 ### Probar antes de publicar
 
 ```powershell
-.\packaging	ry.ps1
+.\packaging\try.ps1
 ```
 
-Compila la versión actual del código y la abre en tu PC, sin publicar nada. Usa tu configuración real, así pruebas con tu carpeta y tu cámara, y cierra la GoPro Sync instalada mientras tanto. La primera vez crea el entorno `.venv` con las dependencias, lo que tarda unos minutos.
+Compila la versión actual del código y la abre en tu PC, sin publicar nada. Usa siempre tu configuración real: lo que cambies en la prueba queda guardado y lo ve también la app instalada. Mientras tanto cierra la GoPro Sync instalada. La primera vez crea el entorno `.venv` con las dependencias, lo que tarda unos minutos.
 
-- `.\packaging	ry.ps1 -FromSource`: abre directo desde el código, sin compilar. Es lo más rápido para probar cambios.
-- `.\packaging	ry.ps1 -Fresh`: usa un perfil limpio temporal, como una instalación nueva (asistente, elección de idioma), sin tocar tu configuración real.
+- `.\packaging\try.ps1 -FromSource`: abre directo desde el código, sin compilar. Es lo más rápido para probar cambios.
 
 ### Publicar una versión
 
