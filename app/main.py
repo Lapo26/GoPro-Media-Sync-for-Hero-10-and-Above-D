@@ -53,6 +53,8 @@ from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput, QSoundEffect, QVide
 from PySide6.QtMultimediaWidgets import QVideoWidget, QGraphicsVideoItem
 
 # Optional: OpenCV for Video Thumbnails
+# Silencia los mensajes de FFmpeg en la consola ("moov atom not found"...)
+os.environ.setdefault("OPENCV_FFMPEG_LOGLEVEL", "-8")
 try:
     import cv2
     _HAS_CV2 = True
@@ -288,6 +290,17 @@ TRANSLATIONS = {
         "ps_start_failed": "Konnte PowerShell nicht starten: {e}",
         "sync_failed_detail": "Sync fehlgeschlagen: {detail}",
         "sd_not_readable": "SD-Karte {root} konnte nicht gelesen werden.",
+        "sync_title_camera": "Synchronisiere {device}",
+        "sync_title_import": "Bilder und Videos importieren",
+        "sync_phase_searching": "Suche Bilder und Videos…",
+        "sync_phase_copying": "Kopiere neue Dateien",
+        "sync_files_progress": "{current} von {total} Dateien · {done} von {size}",
+        "sync_speed_eta": "{speed}/s · noch ~{eta}",
+        "sync_current_file": "Aktuelle Datei",
+        "sync_cancelling": "Wird abgebrochen… (aktuelle Datei wird beendet)",
+        "sync_cancelled_msg": "Abgebrochen: {copied} von {total} Dateien fertig. Auf der Kamera wurde nichts gelöscht.",
+        "sync_hide_btn": "Im Hintergrund weiterlaufen",
+        "video_damaged": "Video beschädigt",
         "backup_dialog_title": "Auf Laufwerk sichern",
         "backup_from": "Zu sichernder Ordner",
         "backup_to": "Backup-Ziel",
@@ -460,6 +473,17 @@ TRANSLATIONS = {
         "ps_start_failed": "Could not start PowerShell: {e}",
         "sync_failed_detail": "Sync failed: {detail}",
         "sd_not_readable": "Could not read SD card {root}.",
+        "sync_title_camera": "Syncing {device}",
+        "sync_title_import": "Importing pictures and videos",
+        "sync_phase_searching": "Looking for pictures and videos…",
+        "sync_phase_copying": "Copying new files",
+        "sync_files_progress": "{current} of {total} files · {done} of {size}",
+        "sync_speed_eta": "{speed}/s · ~{eta} left",
+        "sync_current_file": "Current file",
+        "sync_cancelling": "Cancelling… (finishing the current file)",
+        "sync_cancelled_msg": "Cancelled: {copied} of {total} files done. Nothing was deleted from the camera.",
+        "sync_hide_btn": "Keep running in background",
+        "video_damaged": "Damaged video",
         "backup_dialog_title": "Back up to drive",
         "backup_from": "Folder to back up",
         "backup_to": "Backup destination",
@@ -632,6 +656,17 @@ TRANSLATIONS = {
         "ps_start_failed": "No se pudo iniciar PowerShell: {e}",
         "sync_failed_detail": "Falló la sincronización: {detail}",
         "sd_not_readable": "No se pudo leer la tarjeta SD {root}.",
+        "sync_title_camera": "Sincronizando {device}",
+        "sync_title_import": "Importando fotos y videos",
+        "sync_phase_searching": "Buscando fotos y videos…",
+        "sync_phase_copying": "Copiando archivos nuevos",
+        "sync_files_progress": "{current} de {total} archivos · {done} de {size}",
+        "sync_speed_eta": "{speed}/s · quedan ~{eta}",
+        "sync_current_file": "Archivo actual",
+        "sync_cancelling": "Cancelando… (terminando el archivo en curso)",
+        "sync_cancelled_msg": "Cancelado: {copied} de {total} archivos listos. No se borró nada de la cámara.",
+        "sync_hide_btn": "Seguir en segundo plano",
+        "video_damaged": "Video dañado",
         "backup_dialog_title": "Respaldar a disco",
         "backup_from": "Carpeta a respaldar",
         "backup_to": "Destino del respaldo",
@@ -2794,6 +2829,46 @@ def get_media_capture_date(path, mvhd_local=False):
     return dt
 
 
+# --- [ VIDEOS DANADOS ] ---
+
+def is_broken_mp4(path):
+    """True si el MP4 no tiene la caja 'moov' (indice): video cortado por una
+    copia interrumpida o una grabacion que no cerro bien. No se puede
+    reproducir. Solo lee los encabezados de las cajas (unos bytes)."""
+    if not path.lower().endswith(".mp4"):
+        return False
+    try:
+        with open(path, "rb") as f:
+            f.seek(0, os.SEEK_END)
+            size = f.tell()
+            pos = 0
+            while pos + 8 <= size:
+                f.seek(pos)
+                h = f.read(8)
+                n = struct.unpack(">I", h[:4])[0]
+                if h[4:8] == b"moov":
+                    return False
+                if n == 1:
+                    n = struct.unpack(">Q", f.read(8))[0]
+                elif n == 0:
+                    n = size - pos
+                if n < 8:
+                    break
+                pos += n
+        return True
+    except Exception:
+        return False
+
+
+def replaceable_broken_copy(existing_path, new_size):
+    """Un archivo ya existente con el mismo nombre que esta danado y es mas
+    chico que el original: se reemplaza por la copia buena (no se crea _1)."""
+    try:
+        return os.path.getsize(existing_path) < new_size and is_broken_mp4(existing_path)
+    except OSError:
+        return False
+
+
 # --- [ DETECCION DE DUPLICADOS ] ---
 
 _DUP_SUFFIX_RE = re.compile(r"^(.*)_(\d+)(\.[^.]+)$")
@@ -2865,7 +2940,11 @@ def _copy_creation_time(src, dst):
         pass
 
 
-def copy_file_preserving(src, dst, size=None, progress_cb=None):
+class _CopyCancelled(Exception):
+    pass
+
+
+def copy_file_preserving(src, dst, size=None, progress_cb=None, should_cancel=None):
     """Copia por bloques a "<dst>.part" y renombra al final (nunca queda un
     archivo a medias con el nombre definitivo), verifica el tamano y copia
     los atributos: fechas de modificacion/acceso/creacion y flags."""
@@ -2877,6 +2956,8 @@ def copy_file_preserving(src, dst, size=None, progress_cb=None):
     try:
         with open(src, "rb") as fsrc, open(tmp, "wb") as fdst:
             while True:
+                if should_cancel is not None and should_cancel():
+                    raise _CopyCancelled()
                 buf = fsrc.read(_COPY_CHUNK)
                 if not buf:
                     break
@@ -2894,7 +2975,8 @@ def copy_file_preserving(src, dst, size=None, progress_cb=None):
         _copy_creation_time(src, dst)
         return True
     except Exception as e:
-        print(f"[Copia] Error copiando {src} -> {dst}: {e}")
+        if not isinstance(e, _CopyCancelled):
+            print(f"[Copia] Error copiando {src} -> {dst}: {e}")
         try:
             if os.path.exists(tmp):
                 os.remove(tmp)
@@ -3019,6 +3101,7 @@ class BackupWorkerThread(QThread):
 class SyncWorkerThread(QThread):
     progress = Signal(int, int, str, float)
     finished_sync = Signal(bool, str, dict)
+    plan = Signal(object)        # lista con el tamano de cada archivo (para el progreso total)
 
     def __init__(self, target_dir, delete_after, sync_mode="all", lang="de", sort_into_date_folders=True, parent=None,
                  import_dir=None):
@@ -3033,6 +3116,7 @@ class SyncWorkerThread(QThread):
         self.sd_root = ACTIVE_SOURCE.get("sd_root")
         self.mvhd_local = bool(GOPRO_MODELS.get(self.model or "", {}).get("mvhd_local"))
         self.device_name = LAST_DEVICE_NAME.get("name")
+        self._cancel = False
         # Importacion manual (menu "Importar SD / carpeta"): fuente elegida por
         # el usuario; nunca se borra nada del origen.
         self.import_dir = import_dir
@@ -3082,10 +3166,19 @@ class SyncWorkerThread(QThread):
                 found.append((full, n, size))
         return found
 
+    def cancel(self):
+        """Pide cancelar: se descarta el archivo en curso y no se borra nada
+        de la camara/tarjeta."""
+        self._cancel = True
+
+    def _cancelled_result(self, copied, total):
+        self.finished_sync.emit(False, tr(self.lang, "sync_cancelled_msg", copied=copied, total=total),
+                                {"total": total, "copied": copied, "deleted": 0, "errors": 0, "cancelled": True})
+
     def _copy_file_with_progress(self, src, dst, idx, total, name, size):
         def cb(pct):
             self.progress.emit(idx, total, name, pct)
-        return copy_file_preserving(src, dst, size, cb)
+        return copy_file_preserving(src, dst, size, cb, should_cancel=lambda: self._cancel)
 
     def _sd_capture_date(self, path):
         """Fecha para la carpeta. La GoPro pone la fecha de modificacion del
@@ -3166,12 +3259,15 @@ class SyncWorkerThread(QThread):
             for f in files:
                 index_existing(existing_index, f, os.path.join(root, f))
 
+        self.plan.emit([sz for _s, _n, sz in items])
         copied = errors = deleted = 0
         to_delete = []
         cam_folder = quik_camera_folder(self.target_dir, self.device_name,
                                         [p for paths in existing_index.values() for p in paths])
 
         for idx, (src, name, size) in enumerate(items, start=1):
+            if self._cancel:
+                break
             self.progress.emit(idx, total, name, 0.0)
 
             already = False
@@ -3200,14 +3296,19 @@ class SyncWorkerThread(QThread):
                 dest_dir = self.target_dir
 
             dest = os.path.join(dest_dir, name)
-            if os.path.exists(dest):
+            if os.path.exists(dest) and replaceable_broken_copy(dest, size):
+                print(f"[Sync] Reemplazando copia danada: {dest}")
+            elif os.path.exists(dest):
                 base, ext = os.path.splitext(name)
                 counter = 1
                 while os.path.exists(dest):
                     dest = os.path.join(dest_dir, f"{base}_{counter}{ext}")
                     counter += 1
 
-            if self._copy_file_with_progress(src, dest, idx, total, name, size):
+            ok = self._copy_file_with_progress(src, dest, idx, total, name, size)
+            if self._cancel and not ok:
+                break
+            if ok:
                 copied += 1
                 index_existing(existing_index, os.path.basename(dest), dest)
                 self.progress.emit(idx, total, name, 100.0)
@@ -3218,6 +3319,9 @@ class SyncWorkerThread(QThread):
 
         # Borrar de la tarjeta SOLO lo que ya esta copiado y verificado (mismo
         # tamano), junto con sus .LRV/.THM, como hacia Quik.
+        if self._cancel:
+            self._cancelled_result(copied, total)
+            return
         if self.delete_after and to_delete:
             self.progress.emit(total, total, "__CLEANUP__" + tr(self.lang, "cleaning_up"), 100.0)
             for src in to_delete:
@@ -3293,6 +3397,20 @@ class SyncWorkerThread(QThread):
         while True:
             if proc.poll() is not None:
                 break
+            if self._cancel:
+                # Cancelar: cortar la copia en curso y descartar el archivo a medias.
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+                for _ in range(20):
+                    try:
+                        if os.path.exists(dest_path):
+                            os.remove(dest_path)
+                        break
+                    except OSError:
+                        time.sleep(0.1)
+                return None, False
 
             pct = None
 
@@ -3444,6 +3562,7 @@ class SyncWorkerThread(QThread):
         # frisch kopiert wurde - wird erst NACH der kompletten Kopierschleife
         # in einem Rutsch von der Kamera geloescht (siehe Phase 4 unten).
         to_delete_by_folder = {}
+        self.plan.emit([int(e.get("size") or 0) for e in items])
 
         # Einmalig ALLE bereits lokal vorhandenen Dateien erfassen (auch in
         # Datums-Unterordnern von frueheren Syncs) - so lassen sich schon
@@ -3459,6 +3578,8 @@ class SyncWorkerThread(QThread):
 
         # --- Phase 2 + 3: pro Datei einzeln vergleichen und ggf. kopieren ---
         for idx, entry in enumerate(items, start=1):
+            if self._cancel:
+                break
             name = entry.get("name") or ""
             size = entry.get("size") or 0
             path_str = entry.get("path") or ""
@@ -3527,6 +3648,8 @@ class SyncWorkerThread(QThread):
             # ZEILENWEISE, WAEHREND das Skript noch laeuft, und meldet so
             # den echten, byte-genauen Fortschritt DIESER Datei live weiter.
             copy_result, timed_out = self._run_copy_with_progress(copy_script, idx, total, name, size, root_dest_path)
+            if self._cancel:
+                break
             if timed_out:
                 # Sollte dank des hohen Timeouts praktisch nie mehr passieren -
                 # falls doch (z.B. USB-Verbindung haengt komplett), zaehlt die
@@ -3555,7 +3678,12 @@ class SyncWorkerThread(QThread):
                             dated_dir = os.path.join(dated_dir, cam_folder)
                         os.makedirs(dated_dir, exist_ok=True)
                         target_path = os.path.join(dated_dir, dest_name)
-                        if os.path.exists(target_path):
+                        if os.path.exists(target_path) and replaceable_broken_copy(target_path, size):
+                            print(f"[Sync] Reemplazando copia danada: {target_path}")
+                            os.replace(root_dest_path, target_path)
+                            final_path = target_path
+                            root_dest_path = None
+                        elif os.path.exists(target_path):
                             # Sehr seltener Kollisionsfall (z.B. gleicher
                             # Dateiname taucht am selben Tag zweimal auf).
                             base, ext = os.path.splitext(dest_name)
@@ -3563,7 +3691,8 @@ class SyncWorkerThread(QThread):
                             while os.path.exists(target_path):
                                 target_path = os.path.join(dated_dir, f"{base}_{counter}{ext}")
                                 counter += 1
-                        shutil.move(root_dest_path, target_path)
+                        if root_dest_path:
+                            shutil.move(root_dest_path, target_path)
                         final_path = target_path
                     except Exception:
                         # Verschieben fehlgeschlagen (z.B. Rechteproblem) -
@@ -3585,6 +3714,9 @@ class SyncWorkerThread(QThread):
         # von der Kamera loeschen (ein Bestaetigungsdialog pro Unterordner
         # statt einer pro Datei) ---
         deleted = 0
+        if self._cancel:
+            self._cancelled_result(copied, total)
+            return
         if self.delete_after and to_delete_by_folder:
             self.progress.emit(total, total, "__CLEANUP__" + tr(self.lang, "cleaning_up"), 100.0)
             groups = [{"path": list(folder), "names": names} for folder, names in to_delete_by_folder.items()]
@@ -4177,6 +4309,7 @@ class SyncProgressButton(QWidget):
     """
     clicked = Signal()
     mode_chosen = Signal(str)
+    progress_requested = Signal()   # clic mientras sincroniza: reabrir la ventana de progreso
 
     CHEVRON_WIDTH = 40
 
@@ -4293,7 +4426,9 @@ class SyncProgressButton(QWidget):
             self.mode_chosen.emit("videos")
 
     def mousePressEvent(self, event):
-        if self._clickable and not self._is_syncing:
+        if self._is_syncing:
+            self.progress_requested.emit()
+        elif self._clickable:
             if event.position().x() >= self.width() - self.CHEVRON_WIDTH:
                 SoundManager.play_click()
                 self._show_mode_menu()
@@ -4606,8 +4741,24 @@ class ThumbnailLoaderThread(QThread):
                 return img
         return None
 
+    def _damaged_image(self):
+        img = QImage(self.CACHE_W, self.CACHE_H, QImage.Format.Format_RGB32)
+        img.fill(QColor("#2a1e22"))
+        p = QPainter(img)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setPen(QColor("#ff8a8a"))
+        f = QFont()
+        f.setPixelSize(int(self.CACHE_H * 0.12))
+        f.setBold(True)
+        p.setFont(f)
+        p.drawText(img.rect(), Qt.AlignmentFlag.AlignCenter, "⚠\n" + tr(getattr(self, "lang", "es"), "video_damaged"))
+        p.end()
+        return img
+
     def _load_raw(self, path):
         cache_file = self._cache_path(path)
+        if self.kind == "video" and is_broken_mp4(path):
+            return self._damaged_image()   # sin cache: si se repara, se regenera
         if self.kind == "video":
             raw = self._read_video_frame(path)
         else:
@@ -5327,6 +5478,7 @@ class GalleryBase(QWidget):
             self.loader_thread.wait(300)
 
         self.loader_thread = ThumbnailLoaderThread(files, self.KIND, self)
+        self.loader_thread.lang = self.lang
         self._pending_total = len(files)
         self.loader_thread.thumbnail_ready.connect(self._on_thumbnail_ready)
         self.loader_thread.finished_loading.connect(self._on_loading_finished)
@@ -5842,6 +5994,7 @@ class SyncTabWidget(QWidget):
         add_drop_shadow(self.btn_sync, 35, 8, 110, self.get_theme_color())
         self.btn_sync.clicked.connect(self.start_sync)
         self.btn_sync.mode_chosen.connect(self.start_sync)
+        self.btn_sync.progress_requested.connect(self.show_progress)
         layout.addWidget(self.btn_sync, alignment=Qt.AlignmentFlag.AlignCenter)
 
         self.sync_popup = QLabel("")
@@ -6058,6 +6211,22 @@ class SyncTabWidget(QWidget):
         return any(getattr(self, attr, None) is not None and getattr(self, attr).isRunning()
                    for attr in ("sync_worker", "backup_worker"))
 
+    def _open_progress(self, title):
+        if getattr(self, "progress_dialog", None) is not None:
+            self.progress_dialog.done = True
+            self.progress_dialog.close()
+        self.progress_dialog = SyncProgressDialog(self.window(), self.lang, title,
+                                                  self.config.get("accent_color", "#00f2fe"))
+        self.progress_dialog.attach(self.sync_worker)
+        self.progress_dialog.show()
+
+    def show_progress(self):
+        """Volver a mostrar la ventana de progreso (p. ej. tras ocultarla)."""
+        dlg = getattr(self, "progress_dialog", None)
+        if dlg is not None:
+            dlg.show()
+            dlg.raise_()
+
     def start_import(self, folder, target=None):
         """Importa desde una carpeta o tarjeta elegida a mano (no hace falta
         tener la camara conectada). 'target' permite otro destino solo para
@@ -6078,6 +6247,7 @@ class SyncTabWidget(QWidget):
         )
         self.sync_worker.progress.connect(self.on_sync_progress)
         self.sync_worker.finished_sync.connect(self.on_sync_done)
+        self._open_progress(tr(self.lang, "sync_title_import"))
         self.sync_worker.start()
 
     def start_sync(self, mode="all"):
@@ -6102,6 +6272,8 @@ class SyncTabWidget(QWidget):
         )
         self.sync_worker.progress.connect(self.on_sync_progress)
         self.sync_worker.finished_sync.connect(self.on_sync_done)
+        device = LAST_DEVICE_NAME.get("name") or GOPRO_MODELS.get(self._current_model or "", {}).get("display", "GoPro")
+        self._open_progress(tr(self.lang, "sync_title_camera", device=device))
         self.sync_worker.start()
 
     @Slot(int, int, str, float)
@@ -6856,6 +7028,180 @@ class BackupDialog(QDialog):
 
     def remember(self):
         return self.chk_remember.isChecked()
+
+
+def _fmt_eta(seconds):
+    seconds = int(max(0, seconds))
+    if seconds < 60:
+        return f"{seconds} s"
+    if seconds < 3600:
+        return f"{seconds // 60} min"
+    return f"{seconds // 3600} h {seconds % 3600 // 60:02d} min"
+
+
+class SyncProgressDialog(QDialog):
+    """Progreso de sincronizacion/importacion: que esta haciendo, progreso
+    TOTAL (archivos y bytes, velocidad, tiempo restante), progreso del
+    archivo actual y boton para cancelar."""
+
+    def __init__(self, parent, lang, title, accent):
+        super().__init__(parent)
+        self.lang = lang
+        self.worker = None
+        self.sizes = []
+        self.total_bytes = 0
+        self.done = False
+        self._t0 = None
+        self._samples = []      # (tiempo, bytes) para velocidad media movil
+        self.setWindowTitle(title)
+        self.setModal(False)
+        self.setMinimumWidth(560)
+        self.setStyleSheet(f"""
+            QDialog {{ background: #1c1e29; }}
+            QLabel {{ color: #fff; background: transparent; }}
+            * {{ font-family: {FONT_STACK}; }}
+            QPushButton {{ background: rgba(255,255,255,0.08); color: #fff; border: 1px solid rgba(255,255,255,0.14);
+                          border-radius: 10px; padding: 8px 16px; font-weight: 600; }}
+            QPushButton:hover {{ background: rgba(255,255,255,0.16); }}
+            QPushButton#primary {{ background: {accent}; color: #0d0d12; border: none; font-weight: 800; }}
+            QProgressBar {{ background: rgba(255,255,255,0.08); border: none; border-radius: 7px; }}
+            QProgressBar::chunk {{ background: {accent}; border-radius: 7px; }}
+            QProgressBar#file::chunk {{ background: rgba(255,255,255,0.55); }}
+        """)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(26, 22, 26, 20)
+        lay.setSpacing(8)
+        t = QLabel(title)
+        t.setStyleSheet("font-size: 19px; font-weight: 800;")
+        lay.addWidget(t)
+        self.lbl_phase = QLabel(tr(lang, "sync_phase_searching"))
+        self.lbl_phase.setStyleSheet("font-size: 13px; color: rgba(255,255,255,0.6);")
+        lay.addWidget(self.lbl_phase)
+        lay.addSpacing(6)
+
+        self.lbl_total = QLabel(" ")
+        self.lbl_total.setStyleSheet("font-size: 15px; font-weight: 700;")
+        self.bar_total = QProgressBar()
+        self.bar_total.setRange(0, 0)          # indeterminada mientras busca
+        self.bar_total.setTextVisible(False)
+        self.bar_total.setFixedHeight(14)
+        self.lbl_speed = QLabel(" ")
+        self.lbl_speed.setStyleSheet("font-size: 12px; color: rgba(255,255,255,0.55);")
+        lay.addWidget(self.lbl_total)
+        lay.addWidget(self.bar_total)
+        lay.addWidget(self.lbl_speed)
+        lay.addSpacing(10)
+
+        cap = QLabel(tr(lang, "sync_current_file"))
+        cap.setStyleSheet("font-size: 11px; font-weight: 800; color: rgba(255,255,255,0.45); letter-spacing: 1px;")
+        self.lbl_file = QLabel(" ")
+        self.lbl_file.setStyleSheet("font-size: 13px;")
+        self.bar_file = QProgressBar()
+        self.bar_file.setObjectName("file")
+        self.bar_file.setRange(0, 1000)
+        self.bar_file.setTextVisible(False)
+        self.bar_file.setFixedHeight(8)
+        lay.addWidget(cap)
+        lay.addWidget(self.lbl_file)
+        lay.addWidget(self.bar_file)
+
+        self.lbl_result = QLabel("")
+        self.lbl_result.setWordWrap(True)
+        self.lbl_result.setStyleSheet("font-size: 13px; margin-top: 8px;")
+        lay.addWidget(self.lbl_result)
+
+        row = QHBoxLayout()
+        self.btn_hide = QPushButton(tr(lang, "sync_hide_btn"))
+        self.btn_hide.clicked.connect(self.hide)
+        self.btn_cancel = QPushButton(tr(lang, "cancel_btn"))
+        self.btn_cancel.clicked.connect(self._cancel)
+        self.btn_close = QPushButton(tr(lang, "close_btn2"))
+        self.btn_close.setObjectName("primary")
+        self.btn_close.clicked.connect(self.close)
+        self.btn_close.hide()
+        row.addWidget(self.btn_hide)
+        row.addStretch()
+        row.addWidget(self.btn_cancel)
+        row.addWidget(self.btn_close)
+        lay.addLayout(row)
+
+    def attach(self, worker):
+        self.worker = worker
+        worker.plan.connect(self.set_plan)
+        worker.progress.connect(self.on_progress)
+        worker.finished_sync.connect(self.on_finished)
+
+    def set_plan(self, sizes):
+        self.sizes = [int(x or 0) for x in sizes]
+        self.total_bytes = max(1, sum(self.sizes))
+        self.bar_total.setRange(0, 1000)
+        self.bar_total.setValue(0)
+        self.lbl_phase.setText(tr(self.lang, "sync_phase_copying"))
+        self._t0 = time.monotonic()
+        self._samples = [(self._t0, 0)]
+        self._update_total(0, 0.0)
+
+    def _update_total(self, idx, pct):
+        n = len(self.sizes)
+        if not n:
+            return
+        before = sum(self.sizes[:max(0, idx - 1)])
+        cur = self.sizes[idx - 1] * pct / 100.0 if 0 < idx <= n else 0
+        done_bytes = before + cur
+        self.bar_total.setValue(int(done_bytes / self.total_bytes * 1000))
+        files_done = max(0, idx - 1) + (1 if pct >= 100 else 0)
+        self.lbl_total.setText(tr(self.lang, "sync_files_progress", current=files_done, total=n,
+                                  done=_human_size(done_bytes), size=_human_size(self.total_bytes)))
+        now = time.monotonic()
+        self._samples.append((now, done_bytes))
+        self._samples = [sm for sm in self._samples if now - sm[0] <= 8.0] or [(now, done_bytes)]
+        t_old, b_old = self._samples[0]
+        if now - t_old >= 1.0 and done_bytes > b_old:
+            speed = (done_bytes - b_old) / (now - t_old)
+            eta = (self.total_bytes - done_bytes) / speed if speed > 0 else 0
+            self.lbl_speed.setText(tr(self.lang, "sync_speed_eta", speed=_human_size(speed), eta=_fmt_eta(eta)))
+
+    def on_progress(self, idx, total, name, pct):
+        if name.startswith("__CLEANUP__"):
+            self.lbl_phase.setText(name[len("__CLEANUP__"):])
+            self.lbl_file.setText(" ")
+            self.bar_file.setValue(0)
+            self.btn_cancel.setEnabled(False)   # el borrado final no se interrumpe a medias
+            return
+        if self.sizes:
+            self._update_total(idx, pct)
+        self.lbl_file.setText(f"{name}   {pct:.0f}%")
+        self.bar_file.setValue(int(pct * 10))
+
+    def on_finished(self, ok, message, info):
+        self.done = True
+        if not info.get("cancelled") and self.sizes:
+            self.bar_total.setRange(0, 1000)
+            self.bar_total.setValue(1000)
+        elif not self.sizes:
+            self.bar_total.setRange(0, 1000)
+        self.lbl_phase.setText(" ")
+        self.lbl_speed.setText(" ")
+        self.lbl_result.setText(message)
+        self.btn_cancel.hide()
+        self.btn_hide.hide()
+        self.btn_close.show()
+        self.show()
+        self.raise_()
+
+    def _cancel(self):
+        if self.worker is not None and self.worker.isRunning():
+            self.worker.cancel()
+            self.btn_cancel.setEnabled(False)
+            self.lbl_phase.setText(tr(self.lang, "sync_cancelling"))
+
+    def closeEvent(self, event):
+        # Cerrar la ventana mientras copia = seguir en segundo plano.
+        if not self.done:
+            event.ignore()
+            self.hide()
+            return
+        event.accept()
 
 
 class LanguageDialog(QDialog):
