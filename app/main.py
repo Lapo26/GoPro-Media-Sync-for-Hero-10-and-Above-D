@@ -5592,6 +5592,17 @@ class ToggleSwitch(QWidget):
             self._track._knob_x = target
         self._track.update()
 
+    def changeEvent(self, event):
+        # Deshabilitado = atenuado; antes se veia igual que uno activo.
+        if event.type() == QEvent.Type.EnabledChange:
+            effect = None
+            if not self.isEnabled():
+                effect = QGraphicsOpacityEffect(self)
+                effect.setOpacity(0.4)
+            self.setGraphicsEffect(effect)
+            self.setCursor(Qt.CursorShape.PointingHandCursor if self.isEnabled() else Qt.CursorShape.ArrowCursor)
+        super().changeEvent(event)
+
     def mousePressEvent(self, event):
         if self.isEnabled():
             new_state = not self._checked
@@ -6024,7 +6035,7 @@ class OnboardingWizard(QWidget):
 
         self.chk_open_on_connect = ToggleSwitch(tr(self.lang, "onboard_open_on_connect_checkbox"))
         self.chk_open_on_connect.set_accent(self.accent_color)
-        self.chk_open_on_connect.setEnabled(False)
+        self.chk_open_on_connect.toggled.connect(self._on_open_on_connect_toggle)
         p.addWidget(self.chk_open_on_connect)
 
         hint = QLabel(tr(self.lang, "onboard_open_on_connect_hint"))
@@ -6043,10 +6054,17 @@ class OnboardingWizard(QWidget):
             self.lbl_onboard_path.setText(f"📁  {self.chosen_target_dir}")
 
     def _on_autostart_toggle(self, state):
-        enabled = bool(state)
-        self.chk_open_on_connect.setEnabled(enabled)
-        if not enabled:
+        # "Abrir al conectar" necesita que la app arranque con Windows:
+        # si se apaga el inicio automatico, se apaga tambien.
+        if not state and self.chk_open_on_connect.isChecked():
             self.chk_open_on_connect.setChecked(False)
+
+    def _on_open_on_connect_toggle(self, state):
+        # Antes este interruptor quedaba deshabilitado (sin verse distinto)
+        # hasta activar el otro, y parecia roto. Ahora activarlo enciende
+        # tambien el inicio automatico, que es lo que necesita.
+        if state and not self.chk_autostart.isChecked():
+            self.chk_autostart.setChecked(True)
 
     def _update_step_label(self):
         last = self.TOTAL_STEPS - 1
@@ -6431,7 +6449,6 @@ class SettingsDialog(QDialog):
         self.chk_open_on_connect = ToggleSwitch(tr(self.lang, "onboard_open_on_connect_checkbox"))
         self.chk_open_on_connect.set_accent(self.config.get("accent_color", "#00f2fe"))
         self.chk_open_on_connect.setChecked(self.config.get("open_on_gopro_connect", False), animate=False)
-        self.chk_open_on_connect.setEnabled(self.config.get("autostart_enabled", False))
         self.chk_open_on_connect.toggled.connect(self.on_open_on_connect_toggle)
         system_layout.addWidget(self.chk_open_on_connect)
 
@@ -6533,8 +6550,7 @@ class SettingsDialog(QDialog):
     def on_autostart_toggle(self, state):
         enabled = bool(state)
         self.config["autostart_enabled"] = enabled
-        self.chk_open_on_connect.setEnabled(enabled)
-        if not enabled:
+        if not enabled and self.chk_open_on_connect.isChecked():
             self.chk_open_on_connect.setChecked(False)
             self.config["open_on_gopro_connect"] = False
         save_config(self.config)
@@ -6543,6 +6559,10 @@ class SettingsDialog(QDialog):
     def on_open_on_connect_toggle(self, state):
         self.config["open_on_gopro_connect"] = bool(state)
         save_config(self.config)
+        if state and not self.chk_autostart.isChecked():
+            # Necesita el inicio con Windows: activarlo tambien (y registrarlo).
+            self.chk_autostart.setChecked(True)
+            self.on_autostart_toggle(True)
 
     def on_sort_dates_toggle(self, state):
         self.config["sort_into_date_folders"] = bool(state)
