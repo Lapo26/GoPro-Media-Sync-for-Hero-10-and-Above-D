@@ -27,6 +27,8 @@ La configuración y la caché de miniaturas se guardan en `%APPDATA%\GoProSyncPr
 | **Fotos RAW** | Incluye `.GPR` (RAW de HERO5 Black y posteriores). |
 | **Respaldo a discos externos** | En *Ajustes → Ubicación → Respaldo* agregas una o varias carpetas (p. ej. `E:\Respaldo GoPro`). Después de cada sync, o con **Respaldar ahora**, la carpeta local se copia de forma incremental: solo lo nuevo o cambiado, con las fechas conservadas. **En el respaldo nunca se borra nada**; los discos que no estén conectados se saltan y se avisa. |
 | **Borrar de la cámara/tarjeta** | Si está activado, solo se borra lo que ya está copiado y verificado (mismo tamaño). En la SD también se eliminan los `.LRV`/`.THM` que lo acompañan. |
+| **Idiomas** | Español, inglés y alemán. Al primer inicio se elige el idioma (viene preseleccionado el de Windows); se cambia en *Ajustes → Sistema*. |
+| **Pantallas 4K / escaladas** | Logo, miniaturas, fondo y fotogramas se generan a la resolución real de la pantalla: nítidos con Windows al 150-200 %. Ícono propio legible en todos los tamaños (`packaging/make_icon.py`). |
 | **Rendimiento** | Caché de miniaturas: abrir una galería con miles de fotos pasa de minutos a segundos. La detección usa un PowerShell persistente (~1100 ms → ~170 ms por consulta). Hay menos sondeo en segundo plano y se pausa durante la copia. |
 
 ### Uso con HERO5

@@ -46,7 +46,7 @@ from PySide6.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout, 
                                QGridLayout, QScrollArea, QColorDialog, QGraphicsView, QGraphicsScene, QGraphicsPixmapItem,
                                QSlider, QGraphicsBlurEffect, QMenu, QAbstractButton,
                                QGraphicsOpacityEffect, QLineEdit, QStackedLayout, QListWidget)
-from PySide6.QtGui import (QPixmap, QPainter, QColor, QPainterPath, QImage, 
+from PySide6.QtGui import (QGuiApplication, QPixmap, QPainter, QColor, QPainterPath, QImage, 
                            QLinearGradient, QFont, QKeySequence, QShortcut, QRegion, QPen, QIcon, QImageReader)
 # Multimedia
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput, QSoundEffect, QVideoSink, QMediaMetaData
@@ -209,13 +209,26 @@ def _default_target_dir():
     return os.path.join(pictures, "GoPro")
 
 
+def _system_language():
+    """Idioma inicial segun el idioma de Windows: espanol, aleman o, para
+    cualquier otro, ingles."""
+    try:
+        primary = ctypes.windll.kernel32.GetUserDefaultUILanguage() & 0x3FF
+        return {0x0A: "es", 0x07: "de"}.get(primary, "en")
+    except Exception:
+        return "en"
+
+
+SUPPORTED_LANGUAGES = ("es", "en", "de")
+
 DEFAULT_CONFIG = {
     "target_dir": _default_target_dir(),
     "accent_color": "#00f2fe",
     "delete_after_sync": False,
     "background_image": "",   # Pfad zu einem eigenen Hintergrundbild, leer = Standard-Verlauf
     "background_blur": 0,     # Weichzeichner-Stärke (px) fürs Hintergrundbild
-    "language": "de",         # "de" oder "en" - siehe TRANSLATIONS weiter unten
+    "language": _system_language(),  # "es", "en" o "de" - ver TRANSLATIONS
+    "language_chosen": False,  # True cuando el usuario eligio idioma (asistente o dialogo)
     "sort_into_date_folders": True,  # Dateien beim Sync in YYYY-MM-DD-Unterordner einsortieren
     "backup_dirs": [],          # Respaldos: carpetas en discos externos que reciben una copia del destino
     "backup_after_sync": True,  # Respaldar automaticamente al terminar cada sincronizacion
@@ -333,6 +346,7 @@ TRANSLATIONS = {
         "section_language": "🌐  Sprache",
         "language_de": "Deutsch",
         "language_en": "English",
+        "language_es": "Español",
         "close_btn": "Schließen",
         "color_dialog_title": "Theme-Farbe wählen",
         "choose_target_dir_title": "Zielordner wählen",
@@ -340,6 +354,8 @@ TRANSLATIONS = {
         "image_filter": "Bilder (*.png *.jpg *.jpeg *.bmp *.webp)",
         # --- Einrichtungsassistent (erster Start) ---
         "onboard_step_of": "Schritt {current} von {total}",
+        "onboard_language_title": "Sprache wählen",
+        "onboard_language_sub": "Elige tu idioma · Choose your language",
         "onboard_welcome_title": "Willkommen bei GoPro Sync Pro! 👋",
         "onboard_welcome_sub": "Bevor's losgeht, ein paar kurze Fragen zur Einrichtung.",
         "onboard_name_label": "Wie dürfen wir dich nennen?",
@@ -453,6 +469,7 @@ TRANSLATIONS = {
         "section_language": "🌐  Language",
         "language_de": "Deutsch",
         "language_en": "English",
+        "language_es": "Español",
         "close_btn": "Close",
         "color_dialog_title": "Choose theme color",
         "choose_target_dir_title": "Choose target folder",
@@ -460,6 +477,8 @@ TRANSLATIONS = {
         "image_filter": "Images (*.png *.jpg *.jpeg *.bmp *.webp)",
         # --- Onboarding wizard (first launch) ---
         "onboard_step_of": "Step {current} of {total}",
+        "onboard_language_title": "Choose your language",
+        "onboard_language_sub": "Elige tu idioma · Sprache wählen",
         "onboard_welcome_title": "Welcome to GoPro Sync Pro! 👋",
         "onboard_welcome_sub": "Just a few quick questions before we get started.",
         "onboard_name_label": "What should we call you?",
@@ -475,6 +494,128 @@ TRANSLATIONS = {
         "onboard_next_btn": "Next",
         "onboard_finish_btn": "Let's go! 🚀",
         "onboard_skip_btn": "Set up later",
+    },
+    "es": {
+        "nav_sync": "🔄 Sincronizar",
+        "nav_videos": "🎬 Videos",
+        "nav_pictures": "📸 Fotos",
+        "nav_settings": "⚙️  Ajustes",
+        "waiting_connection": "🔌\nEsperando conexión...",
+        "connect_gopro": "Conecta tu GoPro",
+        "device_info": "INFO DEL DISPOSITIVO",
+        "battery_caption": "⚡  BATERÍA",
+        "storage_caption": "ALMACENAMIENTO",
+        "badge_wifi": "WIFI",
+        "badge_bluetooth": "BLUETOOTH",
+        "badge_gps": "GPS",
+        "tooltip_wifi": "WiFi",
+        "tooltip_bluetooth": "Bluetooth",
+        "tooltip_gps": "GPS",
+        "connected": "🟢 Conectada",
+        "not_connected": "🔴 No conectada",
+        "reading_status": "Leyendo estado...",
+        "free_suffix": "{free} libres",
+        "delete_after_checkbox": "Borrar de la GoPro después de copiar",
+        "sync_idle": "Sincronizar",
+        "menu_all": "🔄  Sincronizar todo",
+        "menu_pictures": "🖼️  Solo fotos",
+        "menu_videos": "🎬  Solo videos",
+        "search_all": "🔎 Buscando fotos y videos en la GoPro...",
+        "search_pictures": "🔎 Buscando fotos en la GoPro...",
+        "search_videos": "🔎 Buscando videos en la GoPro...",
+        "search_generic": "🔎 Buscando archivos en la GoPro...",
+        "transferring": "⬆️ Copiando {current} de {total} archivos\n{name}",
+        "cleaning_up": "Limpiando: borrando originales de la GoPro...",
+        "cleaning_up_popup": "🧹 {name}",
+        "ps_start_failed": "No se pudo iniciar PowerShell: {e}",
+        "sync_failed_detail": "Falló la sincronización: {detail}",
+        "sd_not_readable": "No se pudo leer la tarjeta SD {root}.",
+        "section_backup": "RESPALDO EN DISCOS EXTERNOS",
+        "backup_hint": "La carpeta de destino se copia también a estas carpetas (solo archivos nuevos o modificados, conservando las fechas). En el respaldo nunca se borra nada. Los discos que no estén conectados se saltan.",
+        "backup_add_btn": "Agregar",
+        "backup_remove_btn": "Quitar",
+        "backup_now_btn": "Respaldar ahora",
+        "backup_after_sync_checkbox": "Respaldar automáticamente después de cada sincronización",
+        "backup_choose_title": "Elegir carpeta de respaldo",
+        "backup_same_as_target": "La carpeta de respaldo no puede ser la carpeta de destino (ni estar dentro de ella).",
+        "backup_running": "💾 Respaldo {current}/{total}: {name}",
+        "backup_scanning": "💾 Respaldo: comparando archivos...",
+        "backup_done": "💾 Respaldo listo: {copied} copiados, {skipped} ya estaban.",
+        "backup_missing_suffix": " No disponible: {dirs}.",
+        "backup_errors_suffix": " {errors} errores.",
+        "backup_none": "No hay ninguna carpeta de respaldo configurada.",
+        "sync_failed_no_response": "Falló la sincronización: la cámara no responde.",
+        "gopro_not_found": "No se encontró la GoPro. Revisa la conexión.",
+        "no_device_list": "No se pudo acceder a la lista de dispositivos.",
+        "unknown_error": "Error desconocido.",
+        "no_new_media": "No hay fotos ni videos nuevos.",
+        "no_new_pictures": "No hay fotos nuevas.",
+        "no_new_videos": "No hay videos nuevos.",
+        "sync_result": "✅ {copied} de {total} archivos copiados.",
+        "sync_deleted_suffix": " {deleted} borrados de la GoPro.",
+        "sync_errors_suffix": " ⚠️ {errors} errores.",
+        "video_gallery_title": "🎬 Videos",
+        "picture_gallery_title": "📸 Fotos",
+        "no_videos_yet": "Todavía no hay videos sincronizados.",
+        "no_pictures_yet": "Todavía no hay fotos sincronizadas.",
+        "gallery_sort_newest": "Más recientes primero",
+        "gallery_sort_oldest": "Más antiguos primero",
+        "gallery_today": "Hoy",
+        "gallery_yesterday": "Ayer",
+        "saved_in_gallery": "✅ Guardado en la galería",
+        "view_flat": "Normal",
+        "view_360": "360°",
+        "settings_window_title": "Ajustes",
+        "settings_header": "⚙️  Ajustes",
+        "tab_design": "🎨 Diseño",
+        "tab_folder": "📁 Ubicación",
+        "tab_sounds": "🔊 Sonidos",
+        "tab_system": "🖥️ Sistema",
+        "section_design": "🎨  Diseño",
+        "accent_color": "Color de acento",
+        "custom_background": "Imagen de fondo propia",
+        "choose_image_btn": "🖼️ Elegir imagen…",
+        "remove_btn": "Quitar",
+        "bg_current": "Actual: {name}",
+        "bg_none": "Sin imagen propia: se usa el degradado predeterminado.",
+        "blur_label": "Desenfoque (fondo)",
+        "blur_hint": "Ayuda a que los controles se distingan mejor sobre la imagen de fondo.",
+        "section_folder": "📁  Ubicación",
+        "choose_folder_btn": "Elegir carpeta",
+        "folder_hint": "Aquí se guardan las fotos y videos sincronizados.",
+        "sort_date_folders_checkbox": "Ordenar en carpetas por fecha (AAAA-MM-DD)",
+        "sort_date_folders_hint": "Usa la fecha de captura guardada en el propio archivo (EXIF/video), no la fecha de copia.",
+        "section_sounds": "🔊  Sonidos de la interfaz",
+        "sound_volume_label": "Volumen",
+        "sound_mute_checkbox": "Silenciar sonidos de la interfaz",
+        "section_autostart": "🚀  Inicio automático",
+        "section_language": "🌐  Idioma",
+        "language_de": "Deutsch",
+        "language_en": "English",
+        "language_es": "Español",
+        "close_btn": "Cerrar",
+        "color_dialog_title": "Elegir color del tema",
+        "choose_target_dir_title": "Elegir carpeta de destino",
+        "choose_bg_title": "Elegir imagen de fondo",
+        "image_filter": "Imágenes (*.png *.jpg *.jpeg *.bmp *.webp)",
+        "onboard_step_of": "Paso {current} de {total}",
+        "onboard_language_title": "Elige tu idioma",
+        "onboard_language_sub": "Choose your language · Sprache wählen",
+        "onboard_welcome_title": "¡Bienvenido a GoPro Sync Pro! 👋",
+        "onboard_welcome_sub": "Solo unas preguntas rápidas antes de empezar.",
+        "onboard_name_label": "¿Cómo te llamamos?",
+        "onboard_name_placeholder": "Tu nombre",
+        "onboard_avatar_hint": "Haz clic en el círculo para elegir una foto de perfil (opcional).",
+        "onboard_path_title": "¿Dónde guardamos tus fotos y videos?",
+        "onboard_path_sub": "Puedes cambiarlo cuando quieras en Ajustes.",
+        "onboard_autostart_title": "Inicio automático",
+        "onboard_autostart_checkbox": "Iniciar GoPro Sync Pro con Windows",
+        "onboard_open_on_connect_checkbox": "Abrir la app automáticamente al conectar una GoPro",
+        "onboard_open_on_connect_hint": "Se queda en segundo plano y solo aparece cuando conectas la cámara.",
+        "onboard_back_btn": "Atrás",
+        "onboard_next_btn": "Siguiente",
+        "onboard_finish_btn": "¡Vamos! 🚀",
+        "onboard_skip_btn": "Configurar más tarde",
     },
 }
 
@@ -930,17 +1071,41 @@ def add_drop_shadow(widget, blur_radius=25, offset_y=5, alpha=100, color_hex="#0
     widget.setGraphicsEffect(shadow)
 
 
-def cover_scaled_pixmap(pixmap, target_size):
+def screen_dpr(widget=None):
+    """Escala de pantalla (1.0 = 100 %, 2.0 = 200 %). Con Windows escalado
+    las imagenes deben generarse a resolucion real (logica x escala); si no,
+    Qt las estira y se ven borrosas."""
+    try:
+        if widget is not None:
+            return max(1.0, float(widget.devicePixelRatioF()))
+        screens = QGuiApplication.screens()
+        return max([1.0] + [float(sc.devicePixelRatio()) for sc in screens])
+    except Exception:
+        return 1.0
+
+
+def hidpi_scaled_to_width(pixmap, logical_width, dpr=None):
+    """Como QPixmap.scaledToWidth, pero nitido en pantallas escaladas."""
+    dpr = dpr or screen_dpr()
+    out = pixmap.scaledToWidth(max(1, int(round(logical_width * dpr))), Qt.TransformationMode.SmoothTransformation)
+    out.setDevicePixelRatio(dpr)
+    return out
+
+
+def cover_scaled_pixmap(pixmap, target_size, dpr=1.0):
     """Skaliert ein QPixmap wie CSS 'background-size: cover': füllt die
     Zielgröße komplett aus (kein Verzerren), überschüssige Ränder werden
     mittig abgeschnitten."""
     if pixmap is None or pixmap.isNull() or target_size.width() <= 0 or target_size.height() <= 0:
         return QPixmap()
-    scaled = pixmap.scaled(target_size, Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+    tw, th = int(round(target_size.width() * dpr)), int(round(target_size.height() * dpr))
+    scaled = pixmap.scaled(tw, th, Qt.AspectRatioMode.KeepAspectRatioByExpanding,
                             Qt.TransformationMode.SmoothTransformation)
-    x = max(0, (scaled.width() - target_size.width()) // 2)
-    y = max(0, (scaled.height() - target_size.height()) // 2)
-    return scaled.copy(x, y, target_size.width(), target_size.height())
+    x = max(0, (scaled.width() - tw) // 2)
+    y = max(0, (scaled.height() - th) // 2)
+    out = scaled.copy(x, y, tw, th)
+    out.setDevicePixelRatio(dpr)
+    return out
 
 
 def make_blurred_pixmap(pixmap, radius, max_dim=900):
@@ -3372,10 +3537,14 @@ class VideoFrameView(QWidget):
 
         if self._frame is not None:
             if self.mode == "flat":
-                scaled = self._frame.scaled(rect.size(), Qt.AspectRatioMode.KeepAspectRatio,
+                dpr = screen_dpr(self)
+                scaled = self._frame.scaled(int(rect.width() * dpr), int(rect.height() * dpr),
+                                             Qt.AspectRatioMode.KeepAspectRatio,
                                              Qt.TransformationMode.SmoothTransformation)
-                x = (rect.width() - scaled.width()) / 2
-                y = (rect.height() - scaled.height()) / 2
+                scaled.setDevicePixelRatio(dpr)
+                sz = scaled.deviceIndependentSize()
+                x = (rect.width() - sz.width()) / 2
+                y = (rect.height() - sz.height()) / 2
                 painter.drawImage(QPointF(x, y), scaled)
             else:
                 img_w, img_h = self._frame.width(), self._frame.height()
@@ -3868,7 +4037,7 @@ class SyncProgressButton(QWidget):
 
 THUMB_W, THUMB_H = 220, 150
 
-def make_cover_thumbnail(image, w=THUMB_W, h=THUMB_H, radius=12):
+def make_cover_thumbnail(image, w=THUMB_W, h=THUMB_H, radius=12, dpr=1.0):
     """Schneidet/skaliert ein QImage auf ein rundes Vorschau-Thumbnail.
     Arbeitet bewusst mit QImage statt QPixmap: QImage ist (anders als
     QPixmap) auch in einem Hintergrund-Thread sicher nutzbar - das macht
@@ -3878,15 +4047,21 @@ def make_cover_thumbnail(image, w=THUMB_W, h=THUMB_H, radius=12):
         image = QImage(w, h, QImage.Format.Format_ARGB32_Premultiplied)
         image.fill(QColor("#222228"))
 
-    scaled = image.scaled(w, h, Qt.AspectRatioMode.KeepAspectRatioByExpanding, Qt.TransformationMode.SmoothTransformation)
-    x = max(0, (scaled.width() - w) // 2)
-    y = max(0, (scaled.height() - h) // 2)
-    cropped = scaled.copy(x, y, w, h)
+    # Se genera a resolucion real de pantalla (w x dpr) para que se vea nitida
+    # con Windows escalado; el QImage lleva su devicePixelRatio.
+    pw, ph = int(round(w * dpr)), int(round(h * dpr))
+    scaled = image.scaled(pw, ph, Qt.AspectRatioMode.KeepAspectRatioByExpanding, Qt.TransformationMode.SmoothTransformation)
+    x = max(0, (scaled.width() - pw) // 2)
+    y = max(0, (scaled.height() - ph) // 2)
+    cropped = scaled.copy(x, y, pw, ph)
+    cropped.setDevicePixelRatio(dpr)
 
-    result = QImage(w, h, QImage.Format.Format_ARGB32_Premultiplied)
+    result = QImage(pw, ph, QImage.Format.Format_ARGB32_Premultiplied)
+    result.setDevicePixelRatio(dpr)
     result.fill(Qt.GlobalColor.transparent)
     painter = QPainter(result)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
     path = QPainterPath()
     path.addRoundedRect(0, 0, w, h, radius, radius)
     painter.setClipPath(path)
@@ -3898,8 +4073,9 @@ def draw_play_badge(image):
     result = QImage(image)
     painter = QPainter(result)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-    cx, cy = result.width() / 2, result.height() / 2
-    r = min(result.width(), result.height()) * 0.16
+    size = result.deviceIndependentSize()   # coordenadas logicas (imagen HiDPI)
+    cx, cy = size.width() / 2, size.height() / 2
+    r = min(size.width(), size.height()) * 0.16
     painter.setBrush(QColor(0, 0, 0, 130))
     painter.setPen(Qt.PenStyle.NoPen)
     painter.drawEllipse(QRectF(cx - r, cy - r, r * 2, r * 2))
@@ -3930,6 +4106,7 @@ class ThumbnailLoaderThread(QThread):
         super().__init__(parent)
         self.files = files
         self.kind = kind  # "video" oder "picture"
+        self.dpr = screen_dpr()  # se lee en el hilo de la UI
         self._stop_requested = False
 
     def stop(self):
@@ -3941,7 +4118,7 @@ class ThumbnailLoaderThread(QThread):
     # (clave = ruta + tamano + fecha) y las siguientes cargas son casi
     # instantaneas.
     CACHE_DIR = os.path.join(CONFIG_DIR, "thumb_cache")
-    CACHE_W, CACHE_H = THUMB_W * 2, THUMB_H * 2   # 2x para pantallas HiDPI
+    CACHE_W, CACHE_H = THUMB_W * 2, THUMB_H * 2   # 2x: nitidas hasta 200 % de escala
 
     def _cache_path(self, path):
         try:
@@ -3987,7 +4164,7 @@ class ThumbnailLoaderThread(QThread):
                 return
             try:
                 raw = self._load_raw(path)
-                cover = make_cover_thumbnail(raw, THUMB_W, THUMB_H)
+                cover = make_cover_thumbnail(raw, THUMB_W, THUMB_H, dpr=self.dpr)
                 if self.kind == "video":
                     cover = draw_play_badge(cover)
             except Exception:
@@ -4289,7 +4466,7 @@ class ClickableThumbnail(QLabel):
     def __init__(self, pixmap, on_click, tooltip="", parent=None):
         super().__init__(parent)
         self.setPixmap(pixmap)
-        self.setFixedSize(pixmap.size())
+        self.setFixedSize(pixmap.deviceIndependentSize().toSize())
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         if tooltip: self.setToolTip(tooltip)
         self._on_click = on_click
@@ -4313,6 +4490,9 @@ class ClickableThumbnail(QLabel):
 _WEEKDAYS_DE = ["Montag", "Dienstag", "Mittwoch", "Donnerstag", "Freitag", "Samstag", "Sonntag"]
 _MONTHS_DE = ["Januar", "Februar", "März", "April", "Mai", "Juni", "Juli",
               "August", "September", "Oktober", "November", "Dezember"]
+_WEEKDAYS_ES = ["lunes", "martes", "miércoles", "jueves", "viernes", "sábado", "domingo"]
+_MONTHS_ES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio",
+              "agosto", "septiembre", "octubre", "noviembre", "diciembre"]
 _WEEKDAYS_EN = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 _MONTHS_EN = ["January", "February", "March", "April", "May", "June", "July",
               "August", "September", "October", "November", "December"]
@@ -4330,6 +4510,8 @@ def format_gallery_date_header(date_str, lang="de"):
         return tr(lang, "gallery_yesterday")
     if lang == "de":
         return f"{_WEEKDAYS_DE[dt.weekday()]}, {dt.day}. {_MONTHS_DE[dt.month - 1]} {dt.year}"
+    if lang == "es":
+        return f"{_WEEKDAYS_ES[dt.weekday()].capitalize()}, {dt.day} de {_MONTHS_ES[dt.month - 1]} de {dt.year}"
     return f"{_WEEKDAYS_EN[dt.weekday()]}, {_MONTHS_EN[dt.month - 1]} {dt.day}, {dt.year}"
 
 
@@ -5140,7 +5322,7 @@ class SyncTabWidget(QWidget):
                 logo_pix = trim_transparent_margins(logo_pix)
                 # Gross ueber dem Video (wie im Screenshot markiert) -
                 # Breite orientiert sich am 420px breiten Video-Container.
-                scaled_logo = logo_pix.scaledToWidth(360, Qt.TransformationMode.SmoothTransformation)
+                scaled_logo = hidpi_scaled_to_width(logo_pix, 360, screen_dpr(self))
                 self.logo_label.setPixmap(scaled_logo)
                 self.logo_label.show()
                 self.title_label.hide()
@@ -5456,7 +5638,7 @@ class AvatarPreview(QWidget):
 
     def mousePressEvent(self, event):
         path, _ = QFileDialog.getOpenFileName(
-            self, "", _safe_local_dir(), "Bilder (*.png *.jpg *.jpeg *.bmp *.webp)",
+            self, "", _safe_local_dir(), "*.png *.jpg *.jpeg *.bmp *.webp",
             options=QFileDialog.Option.DontUseNativeDialog
         )
         if path:
@@ -5474,10 +5656,13 @@ class AvatarPreview(QWidget):
         painter.setClipPath(clip_path)
 
         if self._pixmap is not None:
-            scaled = self._pixmap.scaled(r, r, Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+            dpr = screen_dpr(self)
+            scaled = self._pixmap.scaled(int(r * dpr), int(r * dpr), Qt.AspectRatioMode.KeepAspectRatioByExpanding,
                                           Qt.TransformationMode.SmoothTransformation)
-            x = (scaled.width() - r) // 2
-            y = (scaled.height() - r) // 2
+            scaled.setDevicePixelRatio(dpr)
+            sz = scaled.deviceIndependentSize()
+            x = int((sz.width() - r) // 2)
+            y = int((sz.height() - r) // 2)
             painter.drawPixmap(-x, -y, scaled)
         else:
             # Platzhalter bewusst in Graustufen (statt Akzentfarbe) - wirkt
@@ -5542,6 +5727,58 @@ def set_autostart(enabled):
         print(f"Autostart konnte nicht gesetzt werden: {e}")
 
 
+_LANGUAGE_LABELS = [("es", "Español"), ("en", "English"), ("de", "Deutsch")]
+
+
+def _make_language_buttons(current, accent, on_pick):
+    """Fila vertical de botones grandes para elegir idioma (asistente y dialogo)."""
+    box = QVBoxLayout()
+    box.setSpacing(10)
+    buttons = {}
+    for code, label in _LANGUAGE_LABELS:
+        b = QPushButton(label)
+        b.setCheckable(True)
+        b.setChecked(code == current)
+        b.setMinimumHeight(48)
+        b.setStyleSheet(
+            "QPushButton { background: rgba(255,255,255,0.06); color: #fff; font-size: 16px; font-weight: 700;"
+            " border: 1px solid rgba(255,255,255,0.15); border-radius: 12px; padding: 10px 18px; text-align: left; }"
+            " QPushButton:hover { background: rgba(255,255,255,0.12); }"
+            f" QPushButton:checked {{ border: 2px solid {accent}; background: rgba(255,255,255,0.14); }}"
+        )
+        b.clicked.connect(lambda checked=False, c=code: on_pick(c))
+        box.addWidget(b)
+        buttons[code] = b
+    return box, buttons
+
+
+class LanguageDialog(QDialog):
+    """Se muestra una vez en instalaciones que ya habian hecho el asistente
+    antes de que existiera la eleccion de idioma (quedaban en aleman)."""
+
+    def __init__(self, parent, current, accent):
+        super().__init__(parent)
+        self.chosen = current
+        self.setWindowTitle("GoPro Sync Pro")
+        self.setModal(True)
+        self.setMinimumWidth(380)
+        self.setStyleSheet(f"QDialog {{ background: #1c1e29; }} QLabel {{ color: #fff; background: transparent; }}"
+                           f" * {{ font-family: {FONT_STACK}; }}")
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(28, 24, 28, 24)
+        lay.setSpacing(12)
+        title = QLabel("🌐  Idioma · Language · Sprache")
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        title.setStyleSheet("font-size: 18px; font-weight: 800;")
+        lay.addWidget(title)
+        box, _ = _make_language_buttons(current, accent, self._pick)
+        lay.addLayout(box)
+
+    def _pick(self, code):
+        self.chosen = code
+        self.accept()
+
+
 class OnboardingWizard(QWidget):
     """Einrichtungsassistent, der beim allerersten Start EINGEBETTET im
     Hauptfenster erscheint (keine separate Popup-Dialogbox) - drei
@@ -5552,9 +5789,12 @@ class OnboardingWizard(QWidget):
     """
     finished_setup = Signal(dict)
 
-    def __init__(self, lang, accent_color, default_target_dir, parent=None):
+    TOTAL_STEPS = 4   # idioma, perfil, carpeta, inicio automatico
+
+    def __init__(self, lang, accent_color, default_target_dir, parent=None, on_language_selected=None):
         super().__init__(parent)
         self.lang = lang
+        self.on_language_selected = on_language_selected
         self.accent_color = accent_color
         self.chosen_avatar_path = ""
         self.chosen_target_dir = default_target_dir
@@ -5595,6 +5835,7 @@ class OnboardingWizard(QWidget):
 
         self.stack = QStackedWidget()
         card_layout.addWidget(self.stack)
+        self.stack.addWidget(self._build_language_step())
         self.stack.addWidget(self._build_step1())
         self.stack.addWidget(self._build_step2())
         self.stack.addWidget(self._build_step3())
@@ -5632,6 +5873,50 @@ class OnboardingWizard(QWidget):
         outer.addLayout(center_row)
         outer.addStretch(2)
 
+        self._update_step_label()
+
+    def _build_language_step(self):
+        page = QWidget()
+        p = QVBoxLayout(page)
+        p.setSpacing(12)
+        self.lbl_lang_title = QLabel(tr(self.lang, "onboard_language_title"))
+        self.lbl_lang_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.lbl_lang_title.setStyleSheet("font-size: 22px; font-weight: 800; border: none; background: transparent;")
+        self.lbl_lang_sub = QLabel(tr(self.lang, "onboard_language_sub"))
+        self.lbl_lang_sub.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.lbl_lang_sub.setStyleSheet("color: rgba(255,255,255,0.6); font-size: 13px; border: none; background: transparent;")
+        p.addWidget(self.lbl_lang_title)
+        p.addWidget(self.lbl_lang_sub)
+        p.addSpacing(8)
+        box, self._lang_buttons = _make_language_buttons(self.lang, self.accent_color, self._pick_language)
+        p.addLayout(box)
+        p.addStretch()
+        return page
+
+    def _pick_language(self, code):
+        """Cambia el idioma del asistente (y de toda la app) y avanza."""
+        for c, b in self._lang_buttons.items():
+            b.setChecked(c == code)
+        if code != self.lang:
+            self.lang = code
+            if self.on_language_selected:
+                self.on_language_selected(code)
+            self._retranslate()
+        self._go_next()
+
+    def _retranslate(self):
+        """Reconstruye los pasos 1-3 en el nuevo idioma (todavia no tienen datos)."""
+        self.lbl_lang_title.setText(tr(self.lang, "onboard_language_title"))
+        self.lbl_lang_sub.setText(tr(self.lang, "onboard_language_sub"))
+        for _ in range(self.stack.count() - 1):
+            w = self.stack.widget(1)
+            self.stack.removeWidget(w)
+            w.deleteLater()
+        self.stack.addWidget(self._build_step1())
+        self.stack.addWidget(self._build_step2())
+        self.stack.addWidget(self._build_step3())
+        self.btn_skip.setText(tr(self.lang, "onboard_skip_btn"))
+        self.btn_back.setText(tr(self.lang, "onboard_back_btn"))
         self._update_step_label()
 
     def _build_step1(self):
@@ -5761,10 +6046,11 @@ class OnboardingWizard(QWidget):
             self.chk_open_on_connect.setChecked(False)
 
     def _update_step_label(self):
-        self.lbl_step.setText(tr(self.lang, "onboard_step_of", current=self.step + 1, total=3))
+        last = self.TOTAL_STEPS - 1
+        self.lbl_step.setText(tr(self.lang, "onboard_step_of", current=self.step + 1, total=self.TOTAL_STEPS))
         self.btn_back.setVisible(self.step > 0)
-        self.btn_skip.setVisible(self.step == 0)
-        self.btn_next.setText(tr(self.lang, "onboard_finish_btn") if self.step == 2 else tr(self.lang, "onboard_next_btn"))
+        self.btn_skip.setVisible(self.step == 1)
+        self.btn_next.setText(tr(self.lang, "onboard_finish_btn") if self.step == last else tr(self.lang, "onboard_next_btn"))
 
     def _crossfade_to(self, index):
         """Weicher Überblend-Übergang zwischen den Schritten statt eines
@@ -5800,7 +6086,7 @@ class OnboardingWizard(QWidget):
 
     def _go_next(self):
         SoundManager.play_click()
-        if self.step < 2:
+        if self.step < self.TOTAL_STEPS - 1:
             self.step += 1
             self._crossfade_to(self.step)
             self._update_step_label()
@@ -5820,6 +6106,7 @@ class OnboardingWizard(QWidget):
 
     def _finish(self, skipped=False):
         result = {
+            "language": self.lang,
             "profile_name": "" if skipped else self.name_edit.text().strip(),
             "profile_picture": "" if skipped else self.chosen_avatar_path,
             "target_dir": self.chosen_target_dir,
@@ -5868,8 +6155,8 @@ class SettingsDialog(QDialog):
         self.lang = config.get("language", "de")
         self._settings_sound_played = False
         self.setWindowTitle(f"{tr(self.lang, 'settings_window_title')}  ·  v{APP_VERSION}")
-        self.setMinimumWidth(480)
-        self.resize(480, 560)
+        self.setMinimumWidth(520)
+        self.resize(520, 760)
         accent = config.get("accent_color", "#00f2fe")
         self.setStyleSheet(f"""
             QDialog {{
@@ -6055,7 +6342,7 @@ class SettingsDialog(QDialog):
         folder_layout.addWidget(section_backup)
 
         self.list_backup = QListWidget()
-        self.list_backup.setFixedHeight(84)
+        self.list_backup.setMinimumHeight(84)
         self.list_backup.setStyleSheet("""
             QListWidget {
                 color: rgba(255,255,255,0.75); font-size: 12px;
@@ -6156,16 +6443,21 @@ class SettingsDialog(QDialog):
 
         lang_row = QHBoxLayout()
         lang_row.setSpacing(10)
-        self.btn_lang_de = QPushButton(tr(self.lang, "language_de"))
-        self.btn_lang_de.setCheckable(True)
+        self.btn_lang_es = QPushButton(tr(self.lang, "language_es"))
+        self.btn_lang_es.setCheckable(True)
         self.btn_lang_en = QPushButton(tr(self.lang, "language_en"))
         self.btn_lang_en.setCheckable(True)
-        self.btn_lang_de.setChecked(self.lang == "de")
+        self.btn_lang_de = QPushButton(tr(self.lang, "language_de"))
+        self.btn_lang_de.setCheckable(True)
+        self.btn_lang_es.setChecked(self.lang == "es")
         self.btn_lang_en.setChecked(self.lang == "en")
-        self.btn_lang_de.clicked.connect(lambda: self.set_language("de"))
+        self.btn_lang_de.setChecked(self.lang == "de")
+        self.btn_lang_es.clicked.connect(lambda: self.set_language("es"))
         self.btn_lang_en.clicked.connect(lambda: self.set_language("en"))
-        lang_row.addWidget(self.btn_lang_de)
+        self.btn_lang_de.clicked.connect(lambda: self.set_language("de"))
+        lang_row.addWidget(self.btn_lang_es)
         lang_row.addWidget(self.btn_lang_en)
+        lang_row.addWidget(self.btn_lang_de)
         lang_row.addStretch()
         system_layout.addLayout(lang_row)
         system_layout.addStretch()
@@ -6309,9 +6601,11 @@ class SettingsDialog(QDialog):
 
     def set_language(self, new_lang):
         self.lang = new_lang
-        self.btn_lang_de.setChecked(new_lang == "de")
+        self.btn_lang_es.setChecked(new_lang == "es")
         self.btn_lang_en.setChecked(new_lang == "en")
+        self.btn_lang_de.setChecked(new_lang == "de")
         self.config["language"] = new_lang
+        self.config["language_chosen"] = True
         save_config(self.config)
         self.on_language_change(new_lang)
         # Der restliche Dialog-Text selbst wird erst beim naechsten Oeffnen
@@ -6417,7 +6711,7 @@ class MainWindow(QWidget):
             # Transparente Ränder rund um das eigentliche Logo abschneiden,
             # damit kein unnötiger Leerraum/Rand mehr sichtbar ist.
             logo_pix = trim_transparent_margins(logo_pix)
-            app_logo.setPixmap(logo_pix.scaledToWidth(140, Qt.TransformationMode.SmoothTransformation))
+            app_logo.setPixmap(hidpi_scaled_to_width(logo_pix, 140))
         sidebar_layout.addWidget(app_logo)
 
         app_subtitle = QLabel("SYNC PRO")
@@ -6497,7 +6791,8 @@ class MainWindow(QWidget):
         self.onboarding_wizard = None
         if not self.config.get("onboarding_done", False):
             self.onboarding_wizard = OnboardingWizard(
-                self.lang, self.config.get("accent_color", "#00f2fe"), self.sync_page.sync_target_dir
+                self.lang, self.config.get("accent_color", "#00f2fe"), self.sync_page.sync_target_dir,
+                on_language_selected=self.choose_language
             )
             self.onboarding_wizard.finished_setup.connect(self.on_onboarding_finished)
             self.ONBOARDING_INDEX = self.pages.addWidget(self.onboarding_wizard)
@@ -6625,7 +6920,7 @@ class MainWindow(QWidget):
         # Ensure the bg_label covers the full window
         self.bg_label.setGeometry(0, 0, w, h)
         # Use cover_scaled_pixmap to crop/scale the source pixmap to the label size
-        cover = cover_scaled_pixmap(self._bg_source_pixmap, QSize(w, h))
+        cover = cover_scaled_pixmap(self._bg_source_pixmap, QSize(w, h), screen_dpr(self))
         if not cover.isNull():
             self.bg_label.setPixmap(cover)
             self.bg_label.lower()
@@ -6673,6 +6968,24 @@ class MainWindow(QWidget):
         self.lang = new_lang
         self.sync_page.lang = new_lang
         self.retranslate_ui()
+
+    def choose_language(self, new_lang):
+        """Guarda el idioma elegido (asistente/dialogo) y traduce la app al momento."""
+        if new_lang not in SUPPORTED_LANGUAGES:
+            return
+        self.config["language"] = new_lang
+        self.config["language_chosen"] = True
+        save_config(self.config)
+        self.on_language_change(new_lang)
+
+    def ask_language_if_needed(self):
+        """Instalaciones anteriores (asistente ya hecho, sin idioma elegido):
+        preguntar una sola vez."""
+        if self.config.get("language_chosen") or not self.config.get("onboarding_done", False):
+            return
+        dlg = LanguageDialog(self, self.lang, self.config.get("accent_color", "#00f2fe"))
+        dlg.exec()
+        self.choose_language(dlg.chosen)
 
     def retranslate_ui(self):
         """Aktualisiert alle sichtbaren Texte in-place auf die aktuell
@@ -6723,6 +7036,9 @@ class MainWindow(QWidget):
         self.config["autostart_enabled"] = result.get("autostart_enabled", False)
         self.config["open_on_gopro_connect"] = result.get("open_on_gopro_connect", False)
         self.config["onboarding_done"] = True
+        if result.get("language") in SUPPORTED_LANGUAGES:
+            self.config["language"] = result["language"]
+            self.config["language_chosen"] = True
 
         new_dir = result.get("target_dir")
         if new_dir:
@@ -6795,6 +7111,7 @@ class AnimatedSplash(QWidget):
         self.resize(560, 360)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.logo_pix = QPixmap(logo_path)
+        self._scaled_logo = None   # se genera una vez, a la escala de la pantalla
         self.angle = 0
         self.timer = QTimer(self)
         self.timer.timeout.connect(self._update_spin)
@@ -6816,10 +7133,13 @@ class AnimatedSplash(QWidget):
         painter.fillPath(path, grad)
         
         if not self.logo_pix.isNull():
-            scaled_logo = self.logo_pix.scaledToWidth(260, Qt.TransformationMode.SmoothTransformation)
-            x = (self.width() - scaled_logo.width()) // 2
-            y = (self.height() - scaled_logo.height()) // 2 - 20
-            painter.drawPixmap(x, y, scaled_logo)
+            dpr = screen_dpr(self)
+            if self._scaled_logo is None or self._scaled_logo.devicePixelRatio() != dpr:
+                self._scaled_logo = hidpi_scaled_to_width(self.logo_pix, 260, dpr)
+            size = self._scaled_logo.deviceIndependentSize()
+            x = int((self.width() - size.width()) // 2)
+            y = int((self.height() - size.height()) // 2 - 20)
+            painter.drawPixmap(x, y, self._scaled_logo)
             
         cx, cy = self.width() // 2, self.height() - 60
         r = 15
@@ -6891,6 +7211,8 @@ def main():
             # Startet stattdessen automatisch in on_onboarding_finished().
             if window.config.get("onboarding_done", False):
                 window.sync_page.start_monitoring()
+                # Instalaciones anteriores sin idioma elegido: preguntarlo una vez.
+                QTimer.singleShot(300, window.ask_language_if_needed)
 
         # Ladebild insgesamt ca. 1.4s zeigen - NICHT als fixer Zuschlag ON TOP
         # der (jetzt bereits waehrenddessen sichtbaren) Bauzeit, sondern
