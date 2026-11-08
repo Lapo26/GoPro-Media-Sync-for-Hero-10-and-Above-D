@@ -308,9 +308,8 @@ TRANSLATIONS = {
         "import_scanning": "Wird analysiert…",
         "import_summary": "{photos} Bilder und {videos} Videos ({size})",
         "import_new_summary": "{new} neu · {existing} bereits importiert",
-        "import_nothing_new": "Nichts Neues zu importieren.",
+        "import_nothing_new": "Bereits alles importiert: alle {n} Dateien sind schon im Zielordner (gleicher Name und Größe).",
         "import_empty": "In diesem Ordner wurden keine Bilder oder Videos gefunden.",
-        "import_by_date_note": "Nach Datum sortiert ({layout}), Daten und Attribute bleiben erhalten. In der Quelle wird nichts gelöscht.",
         "import_btn": "Importieren",
         "cancel_btn": "Abbrechen",
         "nav_import": "📂  SD / Ordner importieren",
@@ -481,9 +480,8 @@ TRANSLATIONS = {
         "import_scanning": "Scanning…",
         "import_summary": "{photos} pictures and {videos} videos ({size})",
         "import_new_summary": "{new} new · {existing} already imported",
-        "import_nothing_new": "Nothing new to import.",
+        "import_nothing_new": "Everything is already imported: all {n} files are already in the target folder (same name and size).",
         "import_empty": "No pictures or videos found in this folder.",
-        "import_by_date_note": "Sorted by date ({layout}), keeping dates and attributes. Nothing is deleted from the source.",
         "import_btn": "Import",
         "cancel_btn": "Cancel",
         "nav_import": "📂  Import SD / folder",
@@ -654,9 +652,8 @@ TRANSLATIONS = {
         "import_scanning": "Analizando…",
         "import_summary": "{photos} fotos y {videos} videos ({size})",
         "import_new_summary": "{new} nuevos · {existing} ya importados",
-        "import_nothing_new": "No hay nada nuevo para importar.",
+        "import_nothing_new": "Ya está todo importado: los {n} archivos ya están en la carpeta de destino (mismo nombre y tamaño).",
         "import_empty": "No se encontraron fotos ni videos en esta carpeta.",
-        "import_by_date_note": "Se ordenan por fecha ({layout}), conservando fechas y atributos. No se borra nada del origen.",
         "import_btn": "Importar",
         "cancel_btn": "Cancelar",
         "nav_import": "📂  Importar SD / carpeta",
@@ -6552,13 +6549,9 @@ class ImportConfirmDialog(QDialog):
         self.lbl_summary.setStyleSheet("font-size: 15px; font-weight: 700; margin-top: 6px;")
         self.lbl_new = QLabel()
         self.lbl_new.setStyleSheet(f"font-size: 13px; color: {accent};")
-        note = QLabel(tr(lang, "import_by_date_note", layout="AAAA-MM-DD\\HERO5 Black 1" if lang == "es"
-                         else ("YYYY-MM-DD\\HERO5 Black 1" if lang == "en" else "JJJJ-MM-TT\\HERO5 Black 1")))
-        note.setWordWrap(True)
-        note.setStyleSheet("font-size: 11px; color: #888;")
+        self.lbl_new.setWordWrap(True)
         lay.addWidget(self.lbl_summary)
         lay.addWidget(self.lbl_new)
-        lay.addWidget(note)
 
         buttons = QHBoxLayout()
         buttons.addStretch()
@@ -6592,7 +6585,7 @@ class ImportConfirmDialog(QDialog):
         self.lbl_summary.setText(tr(self.lang, "import_summary", photos=info["photos"], videos=info["videos"],
                                     size=_human_size(info["bytes"])))
         if info["new"] == 0:
-            self.lbl_new.setText(tr(self.lang, "import_nothing_new"))
+            self.lbl_new.setText(tr(self.lang, "import_nothing_new", n=info["existing"]))
         else:
             self.lbl_new.setText(tr(self.lang, "import_new_summary", new=info["new"], existing=info["existing"])
                                  + f"  ({_human_size(info['new_bytes'])})")
