@@ -45,7 +45,7 @@ from PySide6.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout, 
                                QStackedWidget, QFrame, QFileDialog, QTabWidget,
                                QGridLayout, QScrollArea, QColorDialog, QGraphicsView, QGraphicsScene, QGraphicsPixmapItem,
                                QSlider, QGraphicsBlurEffect, QMenu, QAbstractButton,
-                               QGraphicsOpacityEffect, QLineEdit, QStackedLayout, QListWidget, QDateEdit)
+                               QGraphicsOpacityEffect, QLineEdit, QStackedLayout, QListWidget, QDateEdit, QProgressBar)
 from PySide6.QtGui import (QGuiApplication, QPixmap, QPainter, QColor, QPainterPath, QImage, 
                            QLinearGradient, QFont, QKeySequence, QShortcut, QRegion, QPen, QIcon, QImageReader)
 # Multimedia
@@ -288,6 +288,31 @@ TRANSLATIONS = {
         "ps_start_failed": "Konnte PowerShell nicht starten: {e}",
         "sync_failed_detail": "Sync fehlgeschlagen: {detail}",
         "sd_not_readable": "SD-Karte {root} konnte nicht gelesen werden.",
+        "backup_dialog_title": "Auf Laufwerk sichern",
+        "backup_from": "Zu sichernder Ordner",
+        "backup_to": "Backup-Ziel",
+        "backup_choose_source_title": "Zu sichernden Ordner wählen",
+        "backup_summary": "{total} Dateien ({size}) im Ordner",
+        "backup_pending": "{n} zu kopieren ({size}) · {skipped} bereits gesichert",
+        "backup_up_to_date": "Das Backup ist bereits aktuell.",
+        "backup_dest_missing": "Wähle ein Ziel (z. B. einen Ordner auf deiner externen Festplatte).",
+        "backup_remember": "Dieses Ziel für automatische Backups verwenden",
+        "backup_start_btn": "Sichern",
+        "backup_progress": "Kopiere {current} von {total}",
+        "backup_cancelled": "Backup abgebrochen: {copied} Dateien kopiert.",
+        "close_btn2": "Schließen",
+        "import_confirm_title": "Bilder und Videos importieren",
+        "import_from": "Von",
+        "import_to": "Nach",
+        "import_change": "Ändern…",
+        "import_scanning": "Wird analysiert…",
+        "import_summary": "{photos} Bilder und {videos} Videos ({size})",
+        "import_new_summary": "{new} neu · {existing} bereits importiert",
+        "import_nothing_new": "Nichts Neues zu importieren.",
+        "import_empty": "In diesem Ordner wurden keine Bilder oder Videos gefunden.",
+        "import_by_date_note": "Nach Datum sortiert ({layout}), Daten und Attribute bleiben erhalten. In der Quelle wird nichts gelöscht.",
+        "import_btn": "Importieren",
+        "cancel_btn": "Abbrechen",
         "nav_import": "📂  SD / Ordner importieren",
         "nav_backup": "💾  Auf Laufwerk sichern",
         "import_title": "SD-Karte oder Ordner zum Importieren wählen",
@@ -436,6 +461,31 @@ TRANSLATIONS = {
         "ps_start_failed": "Could not start PowerShell: {e}",
         "sync_failed_detail": "Sync failed: {detail}",
         "sd_not_readable": "Could not read SD card {root}.",
+        "backup_dialog_title": "Back up to drive",
+        "backup_from": "Folder to back up",
+        "backup_to": "Backup destination",
+        "backup_choose_source_title": "Choose folder to back up",
+        "backup_summary": "{total} files ({size}) in the folder",
+        "backup_pending": "{n} to copy ({size}) · {skipped} already backed up",
+        "backup_up_to_date": "The backup is already up to date.",
+        "backup_dest_missing": "Choose a destination (for example, a folder on your external drive).",
+        "backup_remember": "Use this destination for automatic backups",
+        "backup_start_btn": "Back up",
+        "backup_progress": "Copying {current} of {total}",
+        "backup_cancelled": "Backup cancelled: {copied} files copied.",
+        "close_btn2": "Close",
+        "import_confirm_title": "Import pictures and videos",
+        "import_from": "From",
+        "import_to": "To",
+        "import_change": "Change…",
+        "import_scanning": "Scanning…",
+        "import_summary": "{photos} pictures and {videos} videos ({size})",
+        "import_new_summary": "{new} new · {existing} already imported",
+        "import_nothing_new": "Nothing new to import.",
+        "import_empty": "No pictures or videos found in this folder.",
+        "import_by_date_note": "Sorted by date ({layout}), keeping dates and attributes. Nothing is deleted from the source.",
+        "import_btn": "Import",
+        "cancel_btn": "Cancel",
         "nav_import": "📂  Import SD / folder",
         "nav_backup": "💾  Back up to drive",
         "import_title": "Choose an SD card or folder to import",
@@ -584,6 +634,31 @@ TRANSLATIONS = {
         "ps_start_failed": "No se pudo iniciar PowerShell: {e}",
         "sync_failed_detail": "Falló la sincronización: {detail}",
         "sd_not_readable": "No se pudo leer la tarjeta SD {root}.",
+        "backup_dialog_title": "Respaldar a disco",
+        "backup_from": "Carpeta a respaldar",
+        "backup_to": "Destino del respaldo",
+        "backup_choose_source_title": "Elegir carpeta a respaldar",
+        "backup_summary": "{total} archivos ({size}) en la carpeta",
+        "backup_pending": "{n} para copiar ({size}) · {skipped} ya respaldados",
+        "backup_up_to_date": "El respaldo ya está al día.",
+        "backup_dest_missing": "Elige un destino (por ejemplo, una carpeta en tu disco externo).",
+        "backup_remember": "Usar este destino en los respaldos automáticos",
+        "backup_start_btn": "Respaldar",
+        "backup_progress": "Copiando {current} de {total}",
+        "backup_cancelled": "Respaldo cancelado: {copied} archivos copiados.",
+        "close_btn2": "Cerrar",
+        "import_confirm_title": "Importar fotos y videos",
+        "import_from": "Desde",
+        "import_to": "Hacia",
+        "import_change": "Cambiar…",
+        "import_scanning": "Analizando…",
+        "import_summary": "{photos} fotos y {videos} videos ({size})",
+        "import_new_summary": "{new} nuevos · {existing} ya importados",
+        "import_nothing_new": "No hay nada nuevo para importar.",
+        "import_empty": "No se encontraron fotos ni videos en esta carpeta.",
+        "import_by_date_note": "Se ordenan por fecha ({layout}), conservando fechas y atributos. No se borra nada del origen.",
+        "import_btn": "Importar",
+        "cancel_btn": "Cancelar",
         "nav_import": "📂  Importar SD / carpeta",
         "nav_backup": "💾  Respaldar a disco",
         "import_title": "Elegir tarjeta SD o carpeta para importar",
@@ -2832,6 +2907,10 @@ class BackupWorkerThread(QThread):
         self.source_dir = source_dir
         self.backup_dirs = [d for d in (backup_dirs or []) if d]
         self.lang = lang
+        self._cancel = False
+
+    def cancel(self):
+        self._cancel = True
 
     @staticmethod
     def _dest_available(dest):
@@ -2886,6 +2965,8 @@ class BackupWorkerThread(QThread):
 
             total = len(pending)
             for idx, (src, rel, size, dst) in enumerate(pending, start=1):
+                if self._cancel:
+                    break
                 name = os.path.basename(rel)
                 self.progress.emit(idx, total, name, 0.0)
                 try:
@@ -2903,6 +2984,11 @@ class BackupWorkerThread(QThread):
                 else:
                     errors += 1
 
+        if self._cancel:
+            self.finished_backup.emit(False, tr(self.lang, "backup_cancelled", copied=copied),
+                                      {"copied": copied, "skipped": skipped, "errors": errors, "missing": missing,
+                                       "cancelled": True})
+            return
         msg = tr(self.lang, "backup_done", copied=copied, skipped=skipped)
         if missing:
             msg += tr(self.lang, "backup_missing_suffix", dirs=", ".join(missing))
@@ -5954,20 +6040,22 @@ class SyncTabWidget(QWidget):
         return any(getattr(self, attr, None) is not None and getattr(self, attr).isRunning()
                    for attr in ("sync_worker", "backup_worker"))
 
-    def start_import(self, folder):
+    def start_import(self, folder, target=None):
         """Importa desde una carpeta o tarjeta elegida a mano (no hace falta
-        tener la camara conectada)."""
+        tener la camara conectada). 'target' permite otro destino solo para
+        esta importacion."""
+        target = target or self.sync_target_dir
         if self._busy():
             show_toast(self, tr(self.lang, "busy_wait"))
             return
-        if _is_same_or_inside(folder, self.sync_target_dir) or _is_same_or_inside(self.sync_target_dir, folder):
+        if _is_same_or_inside(folder, target) or _is_same_or_inside(target, folder):
             show_toast(self, tr(self.lang, "import_same_as_target"))
             return
         self.btn_sync.start_sync_visual()
         self.sync_popup.setText(tr(self.lang, "import_searching", folder=folder))
         self.sync_popup.show()
         self.sync_worker = SyncWorkerThread(
-            self.sync_target_dir, False, "all", self.lang,
+            target, False, "all", self.lang,
             self.config.get("sort_into_date_folders", True), self, import_dir=folder
         )
         self.sync_worker.progress.connect(self.on_sync_progress)
@@ -6362,6 +6450,398 @@ def _make_language_buttons(current, accent, on_pick):
         box.addWidget(b)
         buttons[code] = b
     return box, buttons
+
+
+def wrap_path(path):
+    """Permite que un QLabel con wordWrap corte una ruta larga en las barras."""
+    return (path or "").replace("\\", "\\\u200b")
+
+
+def _human_size(num_bytes):
+    size = float(num_bytes)
+    for unit in ("B", "KB", "MB", "GB"):
+        if size < 1024:
+            return f"{size:.0f} {unit}" if unit == "B" else f"{size:.1f} {unit}"
+        size /= 1024
+    return f"{size:.1f} TB"
+
+
+def scan_import_source(source, target):
+    """Cuenta lo que se importaria desde 'source' hacia 'target' (mismo
+    criterio que la sincronizacion: nombre + tamano en cualquier subcarpeta)."""
+    exts = tuple(MEDIA_EXTENSIONS_BY_MODE["all"])
+    photo_exts = tuple(MEDIA_EXTENSIONS_BY_MODE["pictures"])
+    existing = {}
+    if target and os.path.isdir(target):
+        for root, _d, names in os.walk(target):
+            for n in names:
+                try:
+                    existing.setdefault(n, set()).add(os.path.getsize(os.path.join(root, n)))
+                except OSError:
+                    pass
+    info = {"photos": 0, "videos": 0, "bytes": 0, "new": 0, "existing": 0, "new_bytes": 0}
+    for root, dirs, names in os.walk(source):
+        dirs[:] = [d for d in dirs if not d.startswith((".", "$")) and d.upper() != "SYSTEM VOLUME INFORMATION"]
+        for n in names:
+            low = n.lower()
+            if not low.endswith(exts):
+                continue
+            try:
+                size = os.path.getsize(os.path.join(root, n))
+            except OSError:
+                continue
+            info["photos" if low.endswith(photo_exts) else "videos"] += 1
+            info["bytes"] += size
+            if size in existing.get(n, ()):
+                info["existing"] += 1
+            else:
+                info["new"] += 1
+                info["new_bytes"] += size
+    return info
+
+
+class ImportConfirmDialog(QDialog):
+    """Paso 2 de "Importar SD / carpeta": resumen + origen y destino
+    cambiables antes de empezar."""
+
+    def __init__(self, parent, lang, source, target, accent):
+        super().__init__(parent)
+        self.lang = lang
+        self.source = source
+        self.target = target
+        self.setWindowTitle(tr(lang, "import_confirm_title"))
+        self.setModal(True)
+        self.setMinimumWidth(560)
+        self.setStyleSheet(f"""
+            QDialog {{ background: #1c1e29; }}
+            QLabel {{ color: #fff; background: transparent; }}
+            * {{ font-family: {FONT_STACK}; }}
+            QPushButton {{ background: rgba(255,255,255,0.08); color: #fff; border: 1px solid rgba(255,255,255,0.14);
+                          border-radius: 10px; padding: 8px 16px; font-weight: 600; }}
+            QPushButton:hover {{ background: rgba(255,255,255,0.16); }}
+            QPushButton#primary {{ background: {accent}; color: #0d0d12; border: none; font-weight: 800; }}
+            QPushButton#primary:disabled {{ background: rgba(255,255,255,0.12); color: rgba(255,255,255,0.4); }}
+        """)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(26, 22, 26, 20)
+        lay.setSpacing(12)
+
+        title = QLabel(tr(lang, "import_confirm_title"))
+        title.setStyleSheet("font-size: 19px; font-weight: 800;")
+        lay.addWidget(title)
+
+        path_style = ("color: rgba(255,255,255,0.8); font-size: 12px; background: rgba(255,255,255,0.05);"
+                      " border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; padding: 8px 10px;")
+        self.lbl_source = QLabel()
+        self.lbl_target = QLabel()
+        for caption_key, lbl, handler in (("import_from", self.lbl_source, self._change_source),
+                                          ("import_to", self.lbl_target, self._change_target)):
+            cap = QLabel(tr(lang, caption_key))
+            cap.setStyleSheet("font-size: 12px; font-weight: 800; color: rgba(255,255,255,0.5); letter-spacing: 1px;")
+            lay.addWidget(cap)
+            row = QHBoxLayout()
+            lbl.setStyleSheet(path_style)
+            lbl.setWordWrap(True)
+            btn = QPushButton(tr(lang, "import_change"))
+            btn.clicked.connect(handler)
+            row.addWidget(lbl, 1)
+            row.addWidget(btn)
+            lay.addLayout(row)
+
+        self.lbl_summary = QLabel()
+        self.lbl_summary.setStyleSheet("font-size: 15px; font-weight: 700; margin-top: 6px;")
+        self.lbl_new = QLabel()
+        self.lbl_new.setStyleSheet(f"font-size: 13px; color: {accent};")
+        note = QLabel(tr(lang, "import_by_date_note", layout="AAAA-MM-DD\\HERO5 Black 1" if lang == "es"
+                         else ("YYYY-MM-DD\\HERO5 Black 1" if lang == "en" else "JJJJ-MM-TT\\HERO5 Black 1")))
+        note.setWordWrap(True)
+        note.setStyleSheet("font-size: 11px; color: #888;")
+        lay.addWidget(self.lbl_summary)
+        lay.addWidget(self.lbl_new)
+        lay.addWidget(note)
+
+        buttons = QHBoxLayout()
+        buttons.addStretch()
+        cancel = QPushButton(tr(lang, "cancel_btn"))
+        cancel.clicked.connect(self.reject)
+        self.btn_ok = QPushButton(tr(lang, "import_btn"))
+        self.btn_ok.setObjectName("primary")
+        self.btn_ok.setDefault(True)
+        self.btn_ok.clicked.connect(self.accept)
+        buttons.addWidget(cancel)
+        buttons.addWidget(self.btn_ok)
+        lay.addLayout(buttons)
+        self._refresh()
+
+    def _refresh(self):
+        self.lbl_source.setText(wrap_path(self.source))
+        self.lbl_target.setText(wrap_path(self.target))
+        self.lbl_summary.setText(tr(self.lang, "import_scanning"))
+        self.lbl_new.setText("")
+        self.btn_ok.setEnabled(False)
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        QApplication.processEvents()
+        try:
+            info = scan_import_source(self.source, self.target)
+        finally:
+            QApplication.restoreOverrideCursor()
+        self.info = info
+        if info["photos"] + info["videos"] == 0:
+            self.lbl_summary.setText(tr(self.lang, "import_empty"))
+            return
+        self.lbl_summary.setText(tr(self.lang, "import_summary", photos=info["photos"], videos=info["videos"],
+                                    size=_human_size(info["bytes"])))
+        if info["new"] == 0:
+            self.lbl_new.setText(tr(self.lang, "import_nothing_new"))
+        else:
+            self.lbl_new.setText(tr(self.lang, "import_new_summary", new=info["new"], existing=info["existing"])
+                                 + f"  ({_human_size(info['new_bytes'])})")
+            self.btn_ok.setEnabled(True)
+
+    def _change_source(self):
+        d = QFileDialog.getExistingDirectory(self, tr(self.lang, "import_title"), _valid_start_dir(self.source))
+        if d:
+            self.source = os.path.normpath(d)
+            self._refresh()
+
+    def _change_target(self):
+        d = QFileDialog.getExistingDirectory(self, tr(self.lang, "choose_target_dir_title"), _valid_start_dir(self.target))
+        if d:
+            self.target = os.path.normpath(d)
+            self._refresh()
+
+    def accept(self):
+        if _is_same_or_inside(self.source, self.target) or _is_same_or_inside(self.target, self.source):
+            show_toast(self, tr(self.lang, "import_same_as_target"))
+            return
+        super().accept()
+
+
+def scan_backup(source, dest):
+    """Lo que copiaria el respaldo (mismo criterio que BackupWorkerThread)."""
+    info = {"total": 0, "bytes": 0, "pending": 0, "pending_bytes": 0, "skipped": 0}
+    for root, _d, names in os.walk(source):
+        for n in names:
+            if n.endswith(".part"):
+                continue
+            full = os.path.join(root, n)
+            try:
+                st = os.stat(full)
+            except OSError:
+                continue
+            info["total"] += 1
+            info["bytes"] += st.st_size
+            try:
+                d = os.stat(os.path.join(dest, os.path.relpath(full, source))) if dest else None
+                same = d is not None and d.st_size == st.st_size and abs(d.st_mtime - st.st_mtime) <= 2
+            except OSError:
+                same = False
+            if same:
+                info["skipped"] += 1
+            else:
+                info["pending"] += 1
+                info["pending_bytes"] += st.st_size
+    return info
+
+
+class BackupDialog(QDialog):
+    """Respaldar a disco: 1) confirmar carpeta a respaldar y destino
+    (ambos cambiables) con un resumen; 2) progreso de la copia."""
+
+    def __init__(self, parent, lang, source, dest, accent, remember_default=True):
+        super().__init__(parent)
+        self.lang = lang
+        self.source = source
+        self.dest = dest or ""
+        self.worker = None
+        self.result_info = None
+        self.setWindowTitle(tr(lang, "backup_dialog_title"))
+        self.setModal(True)
+        self.setMinimumWidth(580)
+        self.setStyleSheet(f"""
+            QDialog {{ background: #1c1e29; }}
+            QLabel {{ color: #fff; background: transparent; }}
+            * {{ font-family: {FONT_STACK}; }}
+            QPushButton {{ background: rgba(255,255,255,0.08); color: #fff; border: 1px solid rgba(255,255,255,0.14);
+                          border-radius: 10px; padding: 8px 16px; font-weight: 600; }}
+            QPushButton:hover {{ background: rgba(255,255,255,0.16); }}
+            QPushButton#primary {{ background: {accent}; color: #0d0d12; border: none; font-weight: 800; }}
+            QPushButton#primary:disabled {{ background: rgba(255,255,255,0.12); color: rgba(255,255,255,0.4); }}
+            QProgressBar {{ background: rgba(255,255,255,0.08); border: none; border-radius: 8px; height: 16px;
+                           text-align: center; color: #fff; font-weight: 700; }}
+            QProgressBar::chunk {{ background: {accent}; border-radius: 8px; }}
+        """)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(26, 22, 26, 20)
+        outer.setSpacing(12)
+        title = QLabel(tr(lang, "backup_dialog_title"))
+        title.setStyleSheet("font-size: 19px; font-weight: 800;")
+        outer.addWidget(title)
+        self.pages = QStackedWidget()
+        outer.addWidget(self.pages)
+
+        # ---- pagina 1: confirmacion
+        p1 = QWidget()
+        lay = QVBoxLayout(p1)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(10)
+        path_style = ("color: rgba(255,255,255,0.8); font-size: 12px; background: rgba(255,255,255,0.05);"
+                      " border: 1px solid rgba(255,255,255,0.1); border-radius: 8px; padding: 8px 10px;")
+        self.lbl_source = QLabel()
+        self.lbl_dest = QLabel()
+        for caption_key, lbl, handler in (("backup_from", self.lbl_source, self._change_source),
+                                          ("backup_to", self.lbl_dest, self._change_dest)):
+            cap = QLabel(tr(lang, caption_key))
+            cap.setStyleSheet("font-size: 12px; font-weight: 800; color: rgba(255,255,255,0.5); letter-spacing: 1px;")
+            lay.addWidget(cap)
+            row = QHBoxLayout()
+            lbl.setStyleSheet(path_style)
+            lbl.setWordWrap(True)
+            btn = QPushButton(tr(lang, "import_change"))
+            btn.clicked.connect(handler)
+            row.addWidget(lbl, 1)
+            row.addWidget(btn)
+            lay.addLayout(row)
+        self.lbl_summary = QLabel()
+        self.lbl_summary.setStyleSheet("font-size: 15px; font-weight: 700; margin-top: 6px;")
+        self.lbl_pending = QLabel()
+        self.lbl_pending.setWordWrap(True)
+        self.lbl_pending.setStyleSheet(f"font-size: 13px; color: {accent};")
+        lay.addWidget(self.lbl_summary)
+        lay.addWidget(self.lbl_pending)
+        self.chk_remember = ToggleSwitch(tr(lang, "backup_remember"))
+        self.chk_remember.set_accent(accent)
+        self.chk_remember.setChecked(remember_default, animate=False)
+        lay.addWidget(self.chk_remember)
+        note = QLabel(tr(lang, "backup_hint"))
+        note.setWordWrap(True)
+        note.setStyleSheet("font-size: 11px; color: #888;")
+        lay.addWidget(note)
+        b1 = QHBoxLayout()
+        b1.addStretch()
+        cancel = QPushButton(tr(lang, "cancel_btn"))
+        cancel.clicked.connect(self.reject)
+        self.btn_start = QPushButton(tr(lang, "backup_start_btn"))
+        self.btn_start.setObjectName("primary")
+        self.btn_start.clicked.connect(self._start)
+        b1.addWidget(cancel)
+        b1.addWidget(self.btn_start)
+        lay.addLayout(b1)
+        self.pages.addWidget(p1)
+
+        # ---- pagina 2: progreso
+        p2 = QWidget()
+        lay2 = QVBoxLayout(p2)
+        lay2.setContentsMargins(0, 8, 0, 0)
+        lay2.setSpacing(12)
+        self.lbl_count = QLabel()
+        self.lbl_count.setStyleSheet("font-size: 15px; font-weight: 700;")
+        self.bar = QProgressBar()
+        self.bar.setRange(0, 1000)
+        self.bar.setTextVisible(False)
+        self.lbl_file = QLabel()
+        self.lbl_file.setStyleSheet("font-size: 12px; color: rgba(255,255,255,0.6);")
+        self.lbl_result = QLabel()
+        self.lbl_result.setWordWrap(True)
+        self.lbl_result.setStyleSheet("font-size: 13px;")
+        lay2.addWidget(self.lbl_count)
+        lay2.addWidget(self.bar)
+        lay2.addWidget(self.lbl_file)
+        lay2.addWidget(self.lbl_result)
+        lay2.addStretch()
+        b2 = QHBoxLayout()
+        b2.addStretch()
+        self.btn_cancel_run = QPushButton(tr(lang, "cancel_btn"))
+        self.btn_cancel_run.clicked.connect(self._cancel_run)
+        self.btn_close = QPushButton(tr(lang, "close_btn2"))
+        self.btn_close.setObjectName("primary")
+        self.btn_close.clicked.connect(self.accept)
+        self.btn_close.hide()
+        b2.addWidget(self.btn_cancel_run)
+        b2.addWidget(self.btn_close)
+        lay2.addLayout(b2)
+        self.pages.addWidget(p2)
+        self._refresh()
+
+    # ---- confirmacion
+    def _refresh(self):
+        self.lbl_source.setText(wrap_path(self.source))
+        self.lbl_dest.setText(wrap_path(self.dest) if self.dest else "—")
+        self.btn_start.setEnabled(False)
+        if not self.dest:
+            self.lbl_summary.setText("")
+            self.lbl_pending.setText(tr(self.lang, "backup_dest_missing"))
+            return
+        self.lbl_summary.setText(tr(self.lang, "import_scanning"))
+        self.lbl_pending.setText("")
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        QApplication.processEvents()
+        try:
+            info = scan_backup(self.source, self.dest)
+        finally:
+            QApplication.restoreOverrideCursor()
+        self.lbl_summary.setText(tr(self.lang, "backup_summary", total=info["total"], size=_human_size(info["bytes"])))
+        if info["pending"] == 0:
+            self.lbl_pending.setText(tr(self.lang, "backup_up_to_date"))
+        else:
+            self.lbl_pending.setText(tr(self.lang, "backup_pending", n=info["pending"],
+                                        size=_human_size(info["pending_bytes"]), skipped=info["skipped"]))
+            self.btn_start.setEnabled(True)
+
+    def _change_source(self):
+        d = QFileDialog.getExistingDirectory(self, tr(self.lang, "backup_choose_source_title"), _valid_start_dir(self.source))
+        if d:
+            self.source = os.path.normpath(d)
+            self._refresh()
+
+    def _change_dest(self):
+        d = QFileDialog.getExistingDirectory(self, tr(self.lang, "backup_choose_title"),
+                                             _valid_start_dir(self.dest) if self.dest else _safe_local_dir())
+        if d:
+            self.dest = os.path.normpath(d)
+            self._refresh()
+
+    # ---- progreso
+    def _start(self):
+        if _is_same_or_inside(self.dest, self.source) or _is_same_or_inside(self.source, self.dest):
+            show_toast(self, tr(self.lang, "backup_same_as_target"))
+            return
+        self.pages.setCurrentIndex(1)
+        self.worker = BackupWorkerThread(self.source, [self.dest], self.lang, self)
+        self.worker.progress.connect(self._on_progress)
+        self.worker.finished_backup.connect(self._on_done)
+        self.worker.start()
+
+    def _on_progress(self, current, total, name, pct):
+        if name.startswith("__CLEANUP__"):
+            self.lbl_count.setText(name[len("__CLEANUP__"):])
+            return
+        if total:
+            self.lbl_count.setText(tr(self.lang, "backup_progress", current=current, total=total))
+            self.bar.setValue(int(((current - 1) + pct / 100.0) / total * 1000))
+        self.lbl_file.setText(f"{name}  ·  {pct:.0f}%")
+
+    def _on_done(self, ok, message, info):
+        self.result_info = info
+        self.bar.setValue(1000 if not info.get("cancelled") else self.bar.value())
+        self.lbl_file.setText("")
+        self.lbl_result.setText(message)
+        self.btn_cancel_run.hide()
+        self.btn_close.show()
+
+    def _cancel_run(self):
+        if self.worker is not None and self.worker.isRunning():
+            self.worker.cancel()
+            self.btn_cancel_run.setEnabled(False)
+
+    def reject(self):
+        if self.worker is not None and self.worker.isRunning():
+            self._cancel_run()      # cerrar la ventana durante la copia = cancelar
+            return
+        super().reject()
+
+    def remember(self):
+        return self.chk_remember.isChecked()
 
 
 class LanguageDialog(QDialog):
@@ -7225,9 +7705,13 @@ class SettingsDialog(QDialog):
             self.list_backup.takeItem(row)
 
     def backup_now(self):
-        sync_page = getattr(self.parent(), "sync_page", None)
-        if sync_page is not None:
-            sync_page.start_backup()
+        main = self.parent()
+        if hasattr(main, "backup_from_menu"):
+            main.backup_from_menu()
+            # puede haber agregado un destino nuevo: refrescar la lista
+            self.list_backup.clear()
+            for d in self.config.get("backup_dirs", []) or []:
+                self.list_backup.addItem(f"💾  {d}")
 
     def on_backup_after_toggle(self, state):
         self.config["backup_after_sync"] = bool(state)
@@ -7638,26 +8122,34 @@ class MainWindow(QWidget):
         self.switch_page(0, self.btn_nav_sync)
 
     def import_from_folder(self):
+        # 1) seleccion del origen
         folder = QFileDialog.getExistingDirectory(self, tr(self.lang, "import_title"), _safe_local_dir())
         if not folder:
             return
+        # 2) confirmacion: resumen, y origen/destino cambiables
+        dlg = ImportConfirmDialog(self, self.lang, os.path.normpath(folder), self.sync_page.sync_target_dir,
+                                  self.config.get("accent_color", "#00f2fe"))
+        if not dlg.exec():
+            return
+        # 3) importar
         self._go_to_sync_page()
-        self.sync_page.start_import(os.path.normpath(folder))
+        self.sync_page.start_import(dlg.source, dlg.target)
 
     def backup_from_menu(self):
-        """Respaldar ya; si no hay discos configurados, elegir uno primero."""
-        if not self.config.get("backup_dirs"):
-            new_dir = QFileDialog.getExistingDirectory(self, tr(self.lang, "backup_choose_title"), _safe_local_dir())
-            if not new_dir:
-                return
-            new_dir = os.path.normpath(new_dir)
-            if _is_same_or_inside(new_dir, self.config.get("target_dir", "")):
-                show_toast(self, tr(self.lang, "backup_same_as_target"))
-                return
-            self.config["backup_dirs"] = [new_dir]
-            save_config(self.config)
-        self._go_to_sync_page()
-        self.sync_page.start_backup()
+        """Respaldar a disco: dialogo con carpeta a respaldar + destino
+        (cambiables), confirmacion y progreso."""
+        if self.sync_page._busy():
+            show_toast(self, tr(self.lang, "busy_wait"))
+            return
+        dirs = list(self.config.get("backup_dirs") or [])
+        dlg = BackupDialog(self, self.lang, self.sync_page.sync_target_dir, dirs[0] if dirs else "",
+                           self.config.get("accent_color", "#00f2fe"))
+        dlg.exec()
+        if dlg.worker is not None and dlg.remember() and dlg.dest:
+            if not any(os.path.normcase(d) == os.path.normcase(dlg.dest) for d in dirs):
+                dirs.append(dlg.dest)
+                self.config["backup_dirs"] = dirs
+                save_config(self.config)
 
     def choose_language(self, new_lang):
         """Guarda el idioma elegido (asistente/dialogo) y traduce la app al momento."""
