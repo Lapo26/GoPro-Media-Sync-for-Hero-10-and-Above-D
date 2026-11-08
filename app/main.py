@@ -256,7 +256,7 @@ DEFAULT_CONFIG = {
 
 TRANSLATIONS = {
     "de": {
-        "nav_sync": "🔄 Sync",
+        "nav_sync": "📷 Kamera",
         "nav_videos": "🎬 Videos",
         "nav_pictures": "📸 Bilder",
         "nav_settings": "⚙️  Einstellungen",
@@ -290,6 +290,27 @@ TRANSLATIONS = {
         "ps_start_failed": "Konnte PowerShell nicht starten: {e}",
         "sync_failed_detail": "Sync fehlgeschlagen: {detail}",
         "sd_not_readable": "SD-Karte {root} konnte nicht gelesen werden.",
+        "err_gone": "Die Datei ist nicht mehr da (Karte oder Laufwerk getrennt?)",
+        "err_device": "Fehler beim Lesen des Geräts (Karte getrennt oder beschädigt?)",
+        "err_locked": "Lesen nicht möglich: Datei wird verwendet oder Zugriff verweigert",
+        "err_disk_full": "Nicht genug Speicherplatz auf dem Ziellaufwerk",
+        "nav_activity": "📋  Aktivität",
+        "activity_title": "Aktivität",
+        "activity_current": "LÄUFT",
+        "activity_history": "VERLAUF",
+        "activity_idle": "Gerade wird nichts kopiert.",
+        "activity_empty": "In dieser Sitzung gibt es noch keine Aktivität.",
+        "activity_errors": "⚠ {n} mit Fehler",
+        "activity_show_errors": "Details anzeigen",
+        "activity_hide_errors": "Ausblenden",
+        "activity_view": "Details unter Aktivität →",
+        "camera_sync_queued": "Kamera-Sync zur Warteschlange hinzugefügt.",
+        "queue_camera_item": "Kamera",
+        "err_timeout": "Die Kamera hat zu lange nicht geantwortet",
+        "err_no_response": "Die Kamera hat nicht geantwortet (getrennt?)",
+        "err_camera_error": "Die Kamera meldete einen Fehler: {e}",
+        "err_unknown": "Unbekannter Fehler",
+        "err_size_mismatch": "Die kopierte Datei hat nicht die erwartete Größe",
         "busy_syncing": "Synchronisiere",
         "busy_importing": "Importiere",
         "sync_title_import_from": "Importiere aus {folder}",
@@ -443,7 +464,7 @@ TRANSLATIONS = {
         "onboard_skip_btn": "Später einrichten",
     },
     "en": {
-        "nav_sync": "🔄 Sync",
+        "nav_sync": "📷 Camera",
         "nav_videos": "🎬 Videos",
         "nav_pictures": "📸 Pictures",
         "nav_settings": "⚙️  Settings",
@@ -477,6 +498,27 @@ TRANSLATIONS = {
         "ps_start_failed": "Could not start PowerShell: {e}",
         "sync_failed_detail": "Sync failed: {detail}",
         "sd_not_readable": "Could not read SD card {root}.",
+        "err_gone": "The file is gone (was the card or drive disconnected?)",
+        "err_device": "Error reading the device (card disconnected or damaged?)",
+        "err_locked": "Could not read: the file is in use or access is denied",
+        "err_disk_full": "Not enough space on the target drive",
+        "nav_activity": "📋  Activity",
+        "activity_title": "Activity",
+        "activity_current": "IN PROGRESS",
+        "activity_history": "HISTORY",
+        "activity_idle": "Nothing is being copied right now.",
+        "activity_empty": "No activity yet in this session.",
+        "activity_errors": "⚠ {n} with errors",
+        "activity_show_errors": "Show details",
+        "activity_hide_errors": "Hide",
+        "activity_view": "See details in Activity →",
+        "camera_sync_queued": "Camera sync added to the queue.",
+        "queue_camera_item": "Camera",
+        "err_timeout": "The camera took too long to respond",
+        "err_no_response": "The camera did not respond (disconnected?)",
+        "err_camera_error": "The camera returned an error: {e}",
+        "err_unknown": "Unknown error",
+        "err_size_mismatch": "The copied file does not have the expected size",
         "busy_syncing": "Syncing",
         "busy_importing": "Importing",
         "sync_title_import_from": "Importing from {folder}",
@@ -630,7 +672,7 @@ TRANSLATIONS = {
         "onboard_skip_btn": "Set up later",
     },
     "es": {
-        "nav_sync": "🔄 Sincronizar",
+        "nav_sync": "📷 Cámara",
         "nav_videos": "🎬 Videos",
         "nav_pictures": "📸 Fotos",
         "nav_settings": "⚙️  Ajustes",
@@ -664,6 +706,27 @@ TRANSLATIONS = {
         "ps_start_failed": "No se pudo iniciar PowerShell: {e}",
         "sync_failed_detail": "Falló la sincronización: {detail}",
         "sd_not_readable": "No se pudo leer la tarjeta SD {root}.",
+        "err_gone": "El archivo ya no está (¿se desconectó la tarjeta o el disco?)",
+        "err_device": "Error al leer el dispositivo (¿tarjeta desconectada o dañada?)",
+        "err_locked": "No se pudo leer: el archivo está en uso o sin permiso",
+        "err_disk_full": "No hay espacio suficiente en el disco de destino",
+        "nav_activity": "📋  Actividad",
+        "activity_title": "Actividad",
+        "activity_current": "EN CURSO",
+        "activity_history": "HISTORIAL",
+        "activity_idle": "No hay ninguna copia en curso.",
+        "activity_empty": "Todavía no hay actividad en esta sesión.",
+        "activity_errors": "⚠ {n} con error",
+        "activity_show_errors": "Ver detalles",
+        "activity_hide_errors": "Ocultar",
+        "activity_view": "Ver detalles en Actividad →",
+        "camera_sync_queued": "Sincronización de la cámara agregada a la cola.",
+        "queue_camera_item": "Cámara",
+        "err_timeout": "La cámara tardó demasiado en responder",
+        "err_no_response": "La cámara no respondió (¿se desconectó?)",
+        "err_camera_error": "La cámara devolvió un error: {e}",
+        "err_unknown": "Error desconocido",
+        "err_size_mismatch": "El archivo copiado no tiene el tamaño esperado",
         "busy_syncing": "Sincronizando",
         "busy_importing": "Importando",
         "sync_title_import_from": "Importando desde {folder}",
@@ -2952,11 +3015,20 @@ def _copy_creation_time(src, dst):
         pass
 
 
+def _remove_stale_part(path):
+    """Restos de copias cortadas (corte de luz, tarjeta desconectada...)."""
+    try:
+        os.remove(path)
+        print(f"[Sync] Borrado resto de copia incompleta: {path}")
+    except OSError:
+        pass
+
+
 class _CopyCancelled(Exception):
     pass
 
 
-def copy_file_preserving(src, dst, size=None, progress_cb=None, should_cancel=None):
+def copy_file_preserving(src, dst, size=None, progress_cb=None, should_cancel=None, errors_out=None):
     """Copia por bloques a "<dst>.part" y renombra al final (nunca queda un
     archivo a medias con el nombre definitivo), verifica el tamano y copia
     los atributos: fechas de modificacion/acceso/creacion y flags."""
@@ -2981,7 +3053,7 @@ def copy_file_preserving(src, dst, size=None, progress_cb=None, should_cancel=No
                         progress_cb(pct)
                         last_pct = pct
         if os.path.getsize(tmp) != size:
-            raise IOError("tamano distinto tras copiar")
+            raise IOError("size_mismatch")
         shutil.copystat(src, tmp)
         os.replace(tmp, dst)
         _copy_creation_time(src, dst)
@@ -2989,11 +3061,17 @@ def copy_file_preserving(src, dst, size=None, progress_cb=None, should_cancel=No
     except Exception as e:
         if not isinstance(e, _CopyCancelled):
             print(f"[Copia] Error copiando {src} -> {dst}: {e}")
-        try:
-            if os.path.exists(tmp):
-                os.remove(tmp)
-        except Exception:
-            pass
+            if errors_out is not None:
+                errors_out.append(e)
+        # Borrar el .part a medias (con reintentos: el antivirus o el disco
+        # pueden tenerlo abierto un instante).
+        for _ in range(10):
+            try:
+                if os.path.exists(tmp):
+                    os.remove(tmp)
+                break
+            except Exception:
+                time.sleep(0.2)
         return False
 
 
@@ -3129,6 +3207,7 @@ class SyncWorkerThread(QThread):
         self.mvhd_local = bool(GOPRO_MODELS.get(self.model or "", {}).get("mvhd_local"))
         self.device_name = LAST_DEVICE_NAME.get("name")
         self._cancel = False
+        self.error_list = []     # [(archivo, motivo)] para mostrar en Actividad
         # Importacion manual (menu "Importar SD / carpeta"): fuente elegida por
         # el usuario; nunca se borra nada del origen.
         self.import_dir = import_dir
@@ -3185,12 +3264,36 @@ class SyncWorkerThread(QThread):
 
     def _cancelled_result(self, copied, total):
         self.finished_sync.emit(False, tr(self.lang, "sync_cancelled_msg", copied=copied, total=total),
-                                {"total": total, "copied": copied, "deleted": 0, "errors": 0, "cancelled": True})
+                                {"total": total, "copied": copied, "deleted": 0, "errors": len(self.error_list),
+                                 "cancelled": True, "error_list": list(self.error_list)})
+
+    def _err(self, name, reason):
+        self.error_list.append((name, reason))
+
+    def _reason_from_exception(self, e):
+        """Motivo entendible para el usuario a partir de la excepcion."""
+        winerr = getattr(e, "winerror", None)
+        errno_ = getattr(e, "errno", None)
+        if str(e) == "size_mismatch":
+            return tr(self.lang, "err_size_mismatch")
+        if isinstance(e, FileNotFoundError) or winerr in (2, 3):
+            return tr(self.lang, "err_gone")
+        if winerr in (112,) or errno_ == 28:
+            return tr(self.lang, "err_disk_full")
+        if winerr in (5, 21, 23, 31, 55, 483, 1006, 1117, 1167) or errno_ == 5:
+            return tr(self.lang, "err_device")
+        if isinstance(e, PermissionError) or winerr in (32, 33):
+            return tr(self.lang, "err_locked")
+        return str(e) or tr(self.lang, "err_unknown")
 
     def _copy_file_with_progress(self, src, dst, idx, total, name, size):
         def cb(pct):
             self.progress.emit(idx, total, name, pct)
-        return copy_file_preserving(src, dst, size, cb, should_cancel=lambda: self._cancel)
+        errs = []
+        ok = copy_file_preserving(src, dst, size, cb, should_cancel=lambda: self._cancel, errors_out=errs)
+        if not ok and errs:
+            self._err(name, self._reason_from_exception(errs[-1]))
+        return ok
 
     def _sd_capture_date(self, path):
         """Fecha para la carpeta. La GoPro pone la fecha de modificacion del
@@ -3269,6 +3372,9 @@ class SyncWorkerThread(QThread):
         existing_index = {}
         for root, _dirs, files in os.walk(self.target_dir):
             for f in files:
+                if f.endswith(".part"):
+                    _remove_stale_part(os.path.join(root, f))
+                    continue
                 index_existing(existing_index, f, os.path.join(root, f))
 
         self.plan.emit([sz for _s, _n, sz in items])
@@ -3350,8 +3456,11 @@ class SyncWorkerThread(QThread):
                     except Exception:
                         pass
 
-        result_data = {"total": total, "copied": copied, "deleted": deleted, "errors": errors}
+        result_data = {"total": total, "copied": copied, "deleted": deleted, "errors": errors,
+                       "error_list": list(self.error_list)}
         msg = tr(self.lang, "sync_result", copied=copied, total=total)
+        if errors:
+            msg = msg.replace("✅", "⚠️", 1)
         if self.delete_after:
             msg += tr(self.lang, "sync_deleted_suffix", deleted=deleted)
         if errors:
@@ -3584,6 +3693,9 @@ class SyncWorkerThread(QThread):
         existing_index = {}
         for root, _dirs, files in os.walk(self.target_dir):
             for f in files:
+                if f.endswith(".part"):
+                    _remove_stale_part(os.path.join(root, f))
+                    continue
                 index_existing(existing_index, f, os.path.join(root, f))
         cam_folder = quik_camera_folder(self.target_dir, self.device_name,
                                         [p for paths in existing_index.values() for p in paths])
@@ -3668,9 +3780,11 @@ class SyncWorkerThread(QThread):
                 # Datei als Fehler, der Sync laeuft aber mit der naechsten
                 # Datei weiter statt komplett abzubrechen.
                 errors += 1
+                self._err(name, tr(self.lang, "err_timeout"))
                 continue
             if copy_result is None:
                 errors += 1
+                self._err(name, tr(self.lang, "err_no_response"))
                 continue
 
             # Balken dieser Datei sicher auf 100% abschliessen, auch falls
@@ -3721,6 +3835,8 @@ class SyncWorkerThread(QThread):
                     to_delete_by_folder.setdefault(folder_key, []).append(name)
             else:
                 errors += 1
+                err = copy_result.get("error") if isinstance(copy_result, dict) else None
+                self._err(name, tr(self.lang, "err_camera_error", e=err) if err else tr(self.lang, "err_unknown"))
 
         # --- Phase 4: JETZT ERST, nach Abschluss ALLER Kopien, gesammelt
         # von der Kamera loeschen (ein Bestaetigungsdialog pro Unterordner
@@ -3771,9 +3887,12 @@ class SyncWorkerThread(QThread):
                 if attempt == 0 and deleted == 0:
                     time.sleep(2.0)
 
-        result_data = {"total": total, "copied": copied, "deleted": deleted, "errors": errors}
+        result_data = {"total": total, "copied": copied, "deleted": deleted, "errors": errors,
+                       "error_list": list(self.error_list)}
 
         msg = tr(self.lang, "sync_result", copied=copied, total=total)
+        if errors:
+            msg = msg.replace("✅", "⚠️", 1)
         if self.delete_after:
             msg += tr(self.lang, "sync_deleted_suffix", deleted=deleted)
         if errors:
@@ -5254,7 +5373,12 @@ class GalleryBase(QWidget):
 
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
+        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
+        self._relayout_timer = QTimer(self)
+        self._relayout_timer.setSingleShot(True)
+        self._relayout_timer.setInterval(250)
+        self._relayout_timer.timeout.connect(self._relayout_if_needed)
         self.grid_host = QWidget()
         self.grid_host.setStyleSheet("background: transparent;")
         self.grid = QGridLayout(self.grid_host)
@@ -5315,6 +5439,27 @@ class GalleryBase(QWidget):
     def show_empty(self):
         self.scroll.hide()
         self.empty_lbl.show()
+
+    def _columns_for_width(self):
+        """Cuantas miniaturas entran a lo ancho (siempre dejando lugar a la
+        barra de scroll vertical, asi nunca aparece la horizontal)."""
+        spacing = self.grid.spacing() if hasattr(self, "grid") else 18
+        margins = self.grid.contentsMargins() if hasattr(self, "grid") else None
+        extra = (margins.left() + margins.right()) if margins is not None else 18
+        avail = self.scroll.viewport().width() - self.scroll.verticalScrollBar().sizeHint().width() - extra - 4
+        return max(1, (avail + spacing) // (THUMB_W + spacing))
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._relayout_timer.start()
+
+    def _relayout_if_needed(self):
+        if self._columns_for_width() != self.col_count and self.isVisible():
+            self.refresh()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._relayout_timer.start()
 
     def _update_date_button_text(self, label=None):
         if label is None:
@@ -5450,6 +5595,7 @@ class GalleryBase(QWidget):
             return
 
         self.scroll.show()
+        self.col_count = self._columns_for_width()
         self._loaded_count = 0
         self.lbl_loading.setText(f"⏳ 0 / {len(files)}")
         self.lbl_loading.show()
@@ -5764,6 +5910,7 @@ class SDCardIcon(QWidget):
 # --- [ HAUPT-SYNC-TAB ] ---
 
 class SyncTabWidget(QWidget):
+    activity_requested = Signal()
     folder_changed = Signal(str)
     sync_finished = Signal()
 
@@ -6008,14 +6155,25 @@ class SyncTabWidget(QWidget):
         add_drop_shadow(self.btn_sync, 35, 8, 110, self.get_theme_color())
         self.btn_sync.clicked.connect(self.start_sync)
         self.btn_sync.mode_chosen.connect(self.start_sync)
-        self.btn_sync.progress_requested.connect(self.show_progress)
+        self.btn_sync.progress_requested.connect(lambda: self.activity_requested.emit())
         layout.addWidget(self.btn_sync, alignment=Qt.AlignmentFlag.AlignCenter)
 
-        # Progreso integrado (sincronizar / importar) + cola de importaciones
+        # Progreso: el panel completo vive en la seccion Actividad; aqui solo
+        # un enlace mientras copia / con el ultimo resultado.
         self.progress_panel = SyncProgressPanel(self.lang, self.get_theme_color())
         self.progress_panel.cancel_requested.connect(self.cancel_sync)
-        layout.addWidget(self.progress_panel, alignment=Qt.AlignmentFlag.AlignCenter)
-        self._import_queue = []
+        self.activity_page = ActivityPage(self.lang, self.get_theme_color())
+        self.activity_page.set_panel(self.progress_panel)
+        self.lnk_activity = QPushButton(tr(self.lang, "activity_view"))
+        self.lnk_activity.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.lnk_activity.setStyleSheet(
+            "QPushButton { background: transparent; color: rgba(255,255,255,0.6); border: none; font-size: 12px; }"
+            " QPushButton:hover { color: #ffffff; }")
+        self.lnk_activity.clicked.connect(lambda: self.activity_requested.emit())
+        self.lnk_activity.hide()
+        layout.addWidget(self.lnk_activity, alignment=Qt.AlignmentFlag.AlignCenter)
+        self._import_queue = []      # tareas en cola: ("import", carpeta, destino) o ("camera", modo)
+        self._current_title = ""
 
         self.sync_popup = QLabel("")
         self.sync_popup.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -6231,9 +6389,24 @@ class SyncTabWidget(QWidget):
         return any(getattr(self, attr, None) is not None and getattr(self, attr).isRunning()
                    for attr in ("sync_worker", "backup_worker"))
 
+    def _queue_labels(self):
+        out = []
+        for task in self._import_queue:
+            out.append(tr(self.lang, "queue_camera_item") if task[0] == "camera" else os.path.basename(task[1]) or task[1])
+        return out
+
+    def _refresh_queue(self):
+        self.progress_panel.set_queue(len(self._import_queue))
+        self.activity_page.set_queue(self._queue_labels())
+
     def _open_progress(self, title):
-        self.sync_popup.hide()   # el panel ya lo muestra todo
+        self.sync_popup.hide()
+        self._current_title = title
         self.progress_panel.start(title, self.sync_worker, queued=len(self._import_queue))
+        self.activity_page.set_running(True)
+        self.lnk_activity.setText(tr(self.lang, "activity_view"))
+        self._refresh_queue()
+        self.lnk_activity.show()
 
     def show_progress(self):
         self.progress_panel.show()
@@ -6241,7 +6414,7 @@ class SyncTabWidget(QWidget):
     def cancel_sync(self):
         """Cancelar: detiene la copia en curso y vacia la cola de importaciones."""
         self._import_queue.clear()
-        self.progress_panel.set_queue(0)
+        self._refresh_queue()
         worker = getattr(self, "sync_worker", None)
         if worker is not None and worker.isRunning():
             worker.cancel()
@@ -6253,8 +6426,8 @@ class SyncTabWidget(QWidget):
         target = target or self.sync_target_dir
         if self._busy():
             # Ya hay algo copiandose: se agrega a la cola y empieza solo al terminar.
-            self._import_queue.append((folder, target))
-            self.progress_panel.set_queue(len(self._import_queue))
+            self._import_queue.append(("import", folder, target))
+            self._refresh_queue()
             show_toast(self, tr(self.lang, "import_queued", folder=folder))
             return
         if _is_same_or_inside(folder, target) or _is_same_or_inside(target, folder):
@@ -6276,7 +6449,13 @@ class SyncTabWidget(QWidget):
     def start_sync(self, mode="all"):
         if not self.gopro_connected:
             return
-        if hasattr(self, "sync_worker") and self.sync_worker is not None and self.sync_worker.isRunning():
+        if self._busy():
+            # Antes no hacia nada: ahora la sincronizacion de la camara se encola.
+            if not any(t[0] == "camera" for t in self._import_queue):
+                self._import_queue.append(("camera", mode))
+                self._refresh_queue()
+            show_toast(self, tr(self.lang, "camera_sync_queued"))
+            self.activity_requested.emit()
             return
 
         self.btn_sync.start_sync_visual()
@@ -6317,13 +6496,20 @@ class SyncTabWidget(QWidget):
     @Slot(bool, str, dict)
     def on_sync_done(self, success, message, stats):
         self.btn_sync.set_idle(self.gopro_connected)
-        # El resultado queda en el panel de progreso. Si hay importaciones en
-        # cola, sigue con la proxima.
+        self.activity_page.add_history(self._current_title, message, stats)
+        self.activity_page.set_running(False)
+        self.progress_panel.hide()
+        self.lnk_activity.setText(f"{message}   ·   {tr(self.lang, 'activity_view')}")
+        # Si hay tareas en cola, sigue con la proxima.
         if self._import_queue and not stats.get("cancelled"):
-            folder, target = self._import_queue.pop(0)
+            task = self._import_queue.pop(0)
+            self._refresh_queue()
             if stats.get("copied", 0) > 0:
                 self.sync_finished.emit()
-            QTimer.singleShot(400, lambda: self.start_import(folder, target))
+            if task[0] == "camera":
+                QTimer.singleShot(400, lambda: self.start_sync(task[1]))
+            else:
+                QTimer.singleShot(400, lambda: self.start_import(task[1], task[2]))
             return
         if stats.get("copied", 0) > 0:
             SoundManager.play_finish()
@@ -7236,6 +7422,105 @@ class SyncProgressPanel(QFrame):
         self.btn_cancel.setEnabled(False)
         self.lbl_file.setText(tr(self.lang, "sync_cancelling"))
         self.cancel_requested.emit()
+
+
+class ActivityPage(QWidget):
+    """Seccion "Actividad": la copia en curso (panel de progreso), la cola y
+    el historial de la sesion con el detalle de cada error."""
+
+    def __init__(self, lang, accent, parent=None):
+        super().__init__(parent)
+        self.lang = lang
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(32, 28, 32, 28)
+        outer.setSpacing(14)
+        self.title_lbl = QLabel(tr(lang, "activity_title"))
+        self.title_lbl.setStyleSheet("font-size: 24px; font-weight: 800; color: #fff; background: transparent;")
+        outer.addWidget(self.title_lbl)
+        cap_style = "font-size: 12px; font-weight: 800; letter-spacing: 1px; color: rgba(255,255,255,0.45); background: transparent;"
+        self.cap_current = QLabel(tr(lang, "activity_current"))
+        self.cap_current.setStyleSheet(cap_style)
+        outer.addWidget(self.cap_current)
+        self.lbl_idle = QLabel(tr(lang, "activity_idle"))
+        self.lbl_idle.setStyleSheet("font-size: 13px; color: rgba(255,255,255,0.5); background: transparent;")
+        outer.addWidget(self.lbl_idle)
+        self.panel_slot = QVBoxLayout()
+        outer.addLayout(self.panel_slot)
+        self.lbl_queue = QLabel("")
+        self.lbl_queue.setStyleSheet("font-size: 12px; color: rgba(255,255,255,0.6); background: transparent;")
+        self.lbl_queue.setWordWrap(True)
+        outer.addWidget(self.lbl_queue)
+        self.cap_history = QLabel(tr(lang, "activity_history"))
+        self.cap_history.setStyleSheet(cap_style + " margin-top: 10px;")
+        outer.addWidget(self.cap_history)
+        self.scroll = QScrollArea()
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
+        host = QWidget()
+        host.setStyleSheet("background: transparent;")
+        self.history = QVBoxLayout(host)
+        self.history.setAlignment(Qt.AlignmentFlag.AlignTop)
+        self.history.setSpacing(10)
+        self.lbl_empty = QLabel(tr(lang, "activity_empty"))
+        self.lbl_empty.setStyleSheet("font-size: 13px; color: rgba(255,255,255,0.5);")
+        self.history.addWidget(self.lbl_empty)
+        self.scroll.setWidget(host)
+        outer.addWidget(self.scroll, 1)
+
+    def set_panel(self, panel):
+        self.panel_slot.addWidget(panel, alignment=Qt.AlignmentFlag.AlignLeft)
+
+    def set_running(self, running):
+        self.lbl_idle.setVisible(not running)
+
+    def set_queue(self, items):
+        self.lbl_queue.setText(tr(self.lang, "sync_queue", n=len(items)) + ":  " + "  ·  ".join(items) if items else "")
+
+    def add_history(self, title, message, info):
+        self.lbl_empty.hide()
+        card = QFrame()
+        card.setStyleSheet("QFrame { background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.10);"
+                           " border-radius: 12px; } QLabel { border: none; background: transparent; color: #fff; }"
+                           " QPushButton { background: rgba(255,255,255,0.08); color: #fff; border: 1px solid"
+                           " rgba(255,255,255,0.14); border-radius: 8px; padding: 4px 12px; font-size: 12px; }")
+        lay = QVBoxLayout(card)
+        lay.setContentsMargins(14, 10, 14, 10)
+        head = QHBoxLayout()
+        t = QLabel(title)
+        t.setStyleSheet("font-size: 13px; font-weight: 800;")
+        when = QLabel(datetime.now().strftime("%H:%M"))
+        when.setStyleSheet("font-size: 12px; color: rgba(255,255,255,0.5);")
+        head.addWidget(t)
+        head.addStretch()
+        head.addWidget(when)
+        lay.addLayout(head)
+        msg = QLabel(message)
+        msg.setWordWrap(True)
+        msg.setStyleSheet("font-size: 12px; color: rgba(255,255,255,0.8);")
+        lay.addWidget(msg)
+        errors = info.get("error_list") or []
+        if errors:
+            row = QHBoxLayout()
+            warn = QLabel(tr(self.lang, "activity_errors", n=len(errors)))
+            warn.setStyleSheet("font-size: 12px; font-weight: 700; color: #ff8a8a;")
+            btn = QPushButton(tr(self.lang, "activity_show_errors"))
+            row.addWidget(warn)
+            row.addStretch()
+            row.addWidget(btn)
+            lay.addLayout(row)
+            detail = QLabel("\n".join(f"• {name} — {reason}" for name, reason in errors))
+            detail.setWordWrap(True)
+            detail.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+            detail.setStyleSheet("font-size: 12px; color: rgba(255,255,255,0.75);")
+            detail.hide()
+            lay.addWidget(detail)
+
+            def toggle():
+                vis = not detail.isVisible()
+                detail.setVisible(vis)
+                btn.setText(tr(self.lang, "activity_hide_errors" if vis else "activity_show_errors"))
+            btn.clicked.connect(toggle)
+        self.history.insertWidget(0, card)
 
 
 class LanguageDialog(QDialog):
@@ -8291,6 +8576,9 @@ class MainWindow(QWidget):
         sidebar_layout.addWidget(self.btn_nav_sync)
         sidebar_layout.addWidget(self.btn_nav_videos)
         sidebar_layout.addWidget(self.btn_nav_pictures)
+        self.btn_nav_activity = QPushButton(tr(self.lang, "nav_activity"))
+        self.btn_nav_activity.setCheckable(True)
+        sidebar_layout.addWidget(self.btn_nav_activity)
         sidebar_layout.addStretch()
 
         # Acciones siempre disponibles (con o sin camara conectada)
@@ -8327,6 +8615,8 @@ class MainWindow(QWidget):
         self.pages.addWidget(self.sync_page)
         self.pages.addWidget(self.videos_page)
         self.pages.addWidget(self.pictures_page)
+        self.ACTIVITY_INDEX = self.pages.addWidget(self.sync_page.activity_page)
+        self.sync_page.activity_requested.connect(self.show_activity)
 
         # Assistent nur bauen, wenn er tatsaechlich noch gebraucht wird -
         # spart bei jedem normalen Start (nach der ersten Einrichtung) das
@@ -8343,6 +8633,7 @@ class MainWindow(QWidget):
         self.btn_nav_sync.clicked.connect(lambda: self.switch_page(0, self.btn_nav_sync))
         self.btn_nav_videos.clicked.connect(lambda: self.switch_page(1, self.btn_nav_videos))
         self.btn_nav_pictures.clicked.connect(lambda: self.switch_page(2, self.btn_nav_pictures))
+        self.btn_nav_activity.clicked.connect(self.show_activity)
 
         main_layout.addWidget(self.sidebar)
         main_layout.addWidget(self.pages)
@@ -8487,6 +8778,7 @@ class MainWindow(QWidget):
         self.btn_nav_sync.setStyleSheet(style)
         self.btn_nav_videos.setStyleSheet(style)
         self.btn_nav_pictures.setStyleSheet(style)
+        self.btn_nav_activity.setStyleSheet(style)
         self.sync_page.apply_theme()
         if self.sync_page.gopro_connected:
             self.sync_page.stat_status.setStyleSheet(f"color: {c}; font-size: 15px; font-weight: 800; letter-spacing: 0.6px;")
@@ -8570,6 +8862,7 @@ class MainWindow(QWidget):
         self.btn_nav_videos.setText(tr(self.lang, "nav_videos"))
         self.btn_nav_pictures.setText(tr(self.lang, "nav_pictures"))
         self.btn_import.setText(tr(self.lang, "nav_import"))
+        self.btn_nav_activity.setText(tr(self.lang, "nav_activity"))
         self.btn_backup.setText(tr(self.lang, "nav_backup"))
         self.btn_settings.setText(tr(self.lang, "nav_settings"))
 
@@ -8671,7 +8964,11 @@ class MainWindow(QWidget):
         self.btn_nav_sync.setChecked(False)
         self.btn_nav_videos.setChecked(False)
         self.btn_nav_pictures.setChecked(False)
+        self.btn_nav_activity.setChecked(False)
         btn.setChecked(True)
+
+    def show_activity(self):
+        self.switch_page(self.ACTIVITY_INDEX, self.btn_nav_activity)
 
     def closeEvent(self, event):
         monitor = getattr(self.sync_page, "monitor_thread", None)
