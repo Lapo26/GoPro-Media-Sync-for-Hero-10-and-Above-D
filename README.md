@@ -41,6 +41,7 @@ La configuración y la caché de miniaturas se guardan en `%APPDATA%\GoProSyncPr
 ```
 app/                 código de la app (main.py) y recursos (assets/)
 packaging/build.ps1  compila: PyInstaller + ZIP portable + instalador Inno Setup
+packaging/try.ps1    compila y abre la versión actual para probarla en tu PC
 packaging/GoProSync.iss  script del instalador
 release.ps1          publica una versión nueva
 .github/workflows/release.yml  build y Release automáticos en GitHub
@@ -49,6 +50,17 @@ release.ps1          publica una versión nueva
 **Ejecutar desde el código:** `app\install.bat` (instala Python y dependencias), y después `python app\main.py`.
 
 **Compilar localmente:** `powershell -ExecutionPolicy Bypass -File packaging\build.ps1`. El resultado queda en `dist\`. Para generar también el instalador hace falta Inno Setup (`winget install JRSoftware.InnoSetup`).
+
+### Probar antes de publicar
+
+```powershell
+.\packaging	ry.ps1
+```
+
+Compila la versión actual del código y la abre en tu PC, sin publicar nada. Usa tu configuración real, así pruebas con tu carpeta y tu cámara, y cierra la GoPro Sync instalada mientras tanto. La primera vez crea el entorno `.venv` con las dependencias, lo que tarda unos minutos.
+
+- `.\packaging	ry.ps1 -FromSource`: abre directo desde el código, sin compilar. Es lo más rápido para probar cambios.
+- `.\packaging	ry.ps1 -Fresh`: usa un perfil limpio temporal, como una instalación nueva (asistente, elección de idioma), sin tocar tu configuración real.
 
 ### Publicar una versión
 
