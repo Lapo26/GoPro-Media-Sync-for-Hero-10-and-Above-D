@@ -1,0 +1,63 @@
+name: Build y release
+
+# - Al subir un tag vX.Y.Z (lo hace release.ps1): compila y publica el Release
+#   en GitHub con el instalador y el ZIP portable.
+# - "Run workflow" manual en la pestaña Actions: solo compila y deja los
+#   archivos como artefactos descargables (para probar sin publicar).
+on:
+  push:
+    tags: ["v*.*.*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: app/requirements.txt
+
+      - name: Verificar que el tag coincide con APP_VERSION
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}".TrimStart("v")
+          $m = Select-String -Path app/main.py -Pattern '^APP_VERSION\s*=\s*"([^"]+)"'
+          $ver = $m.Matches[0].Groups[1].Value
+          if ($tag -ne $ver) { throw "El tag v$tag no coincide con APP_VERSION=$ver en app/main.py. Usa release.ps1." }
+
+      - name: Instalar Inno Setup si falta
+        shell: pwsh
+        run: |
+          if (-not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) {
+            choco install innosetup -y --no-progress
+          }
+
+      - name: Compilar
+        shell: pwsh
+        run: ./packaging/build.ps1
+
+      - name: Subir artefactos
+        uses: actions/upload-artifact@v4
+        with:
+          name: GoProSync-${{ github.ref_name }}
+          path: |
+            dist/GoProSync-Setup-*.exe
+            dist/GoProSync-*-portable.zip
+          if-no-files-found: error
+
+      - name: Publicar Release
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $files = Get-ChildItem dist -File | Where-Object { $_.Name -like "GoProSync-Setup-*.exe" -or $_.Name -like "*-portable.zip" } | ForEach-Object { $_.FullName }
+          gh release create "${{ github.ref_name }}" @files --title "GoPro Sync ${{ github.ref_name }}" --generate-notes

@@ -6,3 +6,6 @@ dist/
 *.part
 gopro_akku_diagnose.txt
 *.lnk
+installer/Output/
+.venv/
+venv/

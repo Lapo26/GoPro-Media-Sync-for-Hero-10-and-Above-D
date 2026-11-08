@@ -91,6 +91,9 @@ def minimize_own_console():
         pass
 
 
+# Version de la app. La actualiza release.ps1 (y el workflow de release al compilar).
+APP_VERSION = "1.0.0"
+
 CONFIG_DIR = os.path.join(os.getenv("APPDATA") or os.path.expanduser("~"), "GoProSyncPro")
 CONFIG_FILE = os.path.join(CONFIG_DIR, "sync_config.json")
 FONT_STACK = "'Poppins', 'Montserrat', 'Century Gothic', 'Segoe UI Semibold', 'Segoe UI', sans-serif"
@@ -1515,7 +1518,8 @@ def attempt_api_battery_and_force_mtp():
 
 # --- [ ADDED FROM Code 1: BLE + OPEN GOPRO + DIAG LOG ] ---
 BLE_BATTERY_LEVEL_UUID = "00002a19-0000-1000-8000-00805f9b34fb"  # Standard-BLE "Battery Level"
-_DIAG_LOG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "gopro_akku_diagnose.txt")
+# En %APPDATA% y no junto al programa: instalado en "Archivos de programa" no se puede escribir ahi.
+_DIAG_LOG_PATH = os.path.join(CONFIG_DIR, "gopro_akku_diagnose.txt")
 
 async def _ble_read_battery_async(name_match="HERO11", timeout=6.0):
     device = await BleakScanner.find_device_by_filter(
@@ -5863,7 +5867,7 @@ class SettingsDialog(QDialog):
         self.on_language_change = on_language_change
         self.lang = config.get("language", "de")
         self._settings_sound_played = False
-        self.setWindowTitle(tr(self.lang, "settings_window_title"))
+        self.setWindowTitle(f"{tr(self.lang, 'settings_window_title')}  ·  v{APP_VERSION}")
         self.setMinimumWidth(480)
         self.resize(480, 560)
         accent = config.get("accent_color", "#00f2fe")
