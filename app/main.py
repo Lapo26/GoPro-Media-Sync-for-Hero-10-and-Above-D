@@ -55,22 +55,41 @@ from PySide6.QtMultimediaWidgets import QVideoWidget, QGraphicsVideoItem
 # Optional: OpenCV for Video Thumbnails
 # Silencia los mensajes de FFmpeg en la consola ("moov atom not found"...)
 os.environ.setdefault("OPENCV_FFMPEG_LOGLEVEL", "-8")
-try:
-    import cv2
-    _HAS_CV2 = True
-except Exception:
-    _HAS_CV2 = False
+# OpenCV se carga recien al generar la primera miniatura de video (tarda
+# ~1 s en importarse y no hace falta para arrancar).
+cv2 = None
+_HAS_CV2 = True
+
+
+def _load_cv2():
+    global cv2, _HAS_CV2
+    if cv2 is None and _HAS_CV2:
+        try:
+            import cv2 as _cv2
+            cv2 = _cv2
+        except Exception:
+            _HAS_CV2 = False
+    return cv2
 
 # Optional: bleak (Bluetooth LE) für das Auslesen des Akkustands per BLE,
 # UNABHÄNGIG vom USB-Verbindungsmodus der Kamera (siehe read_battery_via_ble
 # weiter unten für die ausführliche Erklärung, warum das der beste Weg ist).
 # Ohne installiertes "bleak"-Paket (pip install bleak) wird dieser Weg
 # einfach übersprungen und die alten Methoden greifen weiter.
-try:
-    from bleak import BleakScanner, BleakClient
-    _HAS_BLEAK = True
-except Exception:
-    _HAS_BLEAK = False
+# bleak (Bluetooth) tambien se carga recien cuando se lee la bateria por BLE.
+BleakScanner = BleakClient = None
+_HAS_BLEAK = True
+
+
+def _load_bleak():
+    global BleakScanner, BleakClient, _HAS_BLEAK
+    if BleakScanner is None and _HAS_BLEAK:
+        try:
+            from bleak import BleakScanner as _S, BleakClient as _C
+            BleakScanner, BleakClient = _S, _C
+        except Exception:
+            _HAS_BLEAK = False
+    return _HAS_BLEAK
 
 def minimize_own_console():
     """Minimiert (statt zu verstecken) das Konsolenfenster, in dem dieses
@@ -1436,17 +1455,23 @@ def trim_transparent_margins(pixmap):
         # kleines Sidebar-Logo ohnehin nicht der erwartete Anwendungsfall
         # und wuerde die Pixel-fuer-Pixel-Suche unnoetig verlangsamen.
         return pixmap
-    min_x, min_y, max_x, max_y = w, h, -1, -1
-    for y in range(h):
-        for x in range(w):
-            if (image.pixel(x, y) >> 24) & 0xFF > 8:  # Alpha > ~3%
-                if x < min_x: min_x = x
-                if x > max_x: max_x = x
-                if y < min_y: min_y = y
-                if y > max_y: max_y = y
+    # Buscar cada borde desde afuera y PARAR en el primer pixel visible
+    # (antes se recorria la imagen entera en Python: ~1,7 s con el logo).
+    def opaque(x, y):
+        return (image.pixel(x, y) >> 24) & 0xFF > 8   # Alpha > ~3%
 
-    if max_x < min_x or max_y < min_y:
+    def row_has(y):
+        return any(opaque(x, y) for x in range(w))
+
+    def col_has(x, y0, y1):
+        return any(opaque(x, y) for y in range(y0, y1 + 1))
+
+    min_y = next((y for y in range(h) if row_has(y)), None)
+    if min_y is None:
         return pixmap  # komplett transparentes Bild - nichts zu tun
+    max_y = next(y for y in range(h - 1, -1, -1) if row_has(y))
+    min_x = next(x for x in range(w) if col_has(x, min_y, max_y))
+    max_x = next(x for x in range(w - 1, -1, -1) if col_has(x, min_y, max_y))
 
     cropped = image.copy(min_x, min_y, max_x - min_x + 1, max_y - min_y + 1)
     return QPixmap.fromImage(cropped)
@@ -2077,7 +2102,7 @@ def read_battery_via_ble(model=None):
     ~12 statt ~6 Sekunden) und macht den Ansatz unnoetig fehleranfaelliger.
     Jetzt wird das tatsaechlich erkannte Modell (z.B. "HERO9") als
     name_match uebergeben."""
-    if not _HAS_BLEAK:
+    if not _load_bleak():
         return None
     try:
         return asyncio.run(_ble_read_battery_async(name_match=model or "HERO11"))
@@ -4957,7 +4982,7 @@ class ThumbnailLoaderThread(QThread):
         self.finished_loading.emit()
 
     def _read_video_frame(self, path):
-        if not _HAS_CV2:
+        if _load_cv2() is None:
             return None
         try:
             cap = cv2.VideoCapture(path)
@@ -5459,7 +5484,13 @@ class GalleryBase(QWidget):
 
     def showEvent(self, event):
         super().showEvent(event)
-        self._relayout_timer.start()
+        # Las galerias se cargan recien la primera vez que se abren (antes se
+        # recorrian las ~3000 fotos/videos al arrancar la app).
+        if getattr(self, "_needs_refresh", False):
+            self._needs_refresh = False
+            QTimer.singleShot(0, self.refresh)
+        else:
+            self._relayout_timer.start()
 
     def _update_date_button_text(self, label=None):
         if label is None:
@@ -5534,6 +5565,9 @@ class GalleryBase(QWidget):
             self._set_date_filter((a, b), None, label)
 
     def _mtime_for_path(self, path):
+        cached = getattr(self, "_mtime_cache", {}).get(path)
+        if cached is not None:
+            return cached
         try:
             return os.path.getmtime(path)
         except Exception:
@@ -5549,21 +5583,35 @@ class GalleryBase(QWidget):
             if re.match(r"^\d{4}-\d{2}-\d{2}$", name):   # FECHA\\archivo o FECHA\\camara\\archivo
                 return name
         try:
-            return datetime.fromtimestamp(os.path.getmtime(path)).strftime("%Y-%m-%d")
+            return datetime.fromtimestamp(self._mtime_for_path(path)).strftime("%Y-%m-%d")
         except Exception:
             return "0000-00-00"
 
     def get_files(self, exts):
-        """Durchsucht den Zielordner REKURSIV (Dateien landen seit der
-        Datums-Sortierung in YYYY-MM-DD-Unterordnern statt flach im Root)
-        und gibt volle Pfade zurueck - sortiert nach echtem Datei-Datum
-        (mtime), Reihenfolge je nach self.sort_newest_first."""
+        """Recorre el destino recursivamente y devuelve las rutas ordenadas
+        por fecha. Usa os.scandir: en Windows la fecha de cada archivo viene
+        con el listado de la carpeta, sin consultar el disco archivo por
+        archivo (antes eran miles de consultas: ~4 s en disco mecanico)."""
         results = []
+        self._mtime_cache = {}
+        stack = [self.folder]
         try:
-            for root, _dirs, files in os.walk(self.folder):
-                for f in files:
-                    if f.lower().endswith(exts):
-                        results.append(os.path.join(root, f))
+            while stack:
+                d = stack.pop()
+                try:
+                    it = os.scandir(d)
+                except OSError:
+                    continue
+                with it:
+                    for e in it:
+                        try:
+                            if e.is_dir(follow_symlinks=False):
+                                stack.append(e.path)
+                            elif e.name.lower().endswith(exts):
+                                results.append(e.path)
+                                self._mtime_cache[e.path] = e.stat(follow_symlinks=False).st_mtime
+                        except OSError:
+                            continue
         except Exception:
             return []
         if self.date_filter:
@@ -5688,6 +5736,9 @@ class GalleryBase(QWidget):
 
     def refresh(self):
         """Leert das Grid und laedt die Dateien neu (z.B. nach einem Sync oder Ordnerwechsel)."""
+        if not self.isVisible():
+            self._needs_refresh = True    # se recarga al abrir la galeria
+            return
         self._pending_thumbs = []
         self._thumb_widgets = {}
         self._flush_timer.stop()
@@ -5709,7 +5760,7 @@ class VideoGallery(GalleryBase):
 
     def __init__(self, folder, lang="de"):
         super().__init__(folder, tr(lang, "video_gallery_title"), "🎬", tr(lang, "no_videos_yet"), lang)
-        self.populate()
+        self._needs_refresh = True   # se carga al abrirla
 
     def play_video(self, path):
         SoundManager.play_click()
@@ -5722,7 +5773,7 @@ class PictureGallery(GalleryBase):
 
     def __init__(self, folder, lang="de"):
         super().__init__(folder, tr(lang, "picture_gallery_title"), "📸", tr(lang, "no_pictures_yet"), lang)
-        self.populate()
+        self._needs_refresh = True   # se carga al abrirla
 
     def open_image(self, path):
         SoundManager.play_click()
@@ -5911,6 +5962,7 @@ class SDCardIcon(QWidget):
 
 class SyncTabWidget(QWidget):
     activity_requested = Signal()
+    activity_progress = Signal(object)   # % total de la copia en curso, o None si no hay
     folder_changed = Signal(str)
     sync_finished = Signal()
 
@@ -6171,6 +6223,7 @@ class SyncTabWidget(QWidget):
             " QPushButton:hover { color: #ffffff; }")
         self.lnk_activity.clicked.connect(lambda: self.activity_requested.emit())
         self.lnk_activity.hide()
+        self._camera_task_running = False
         layout.addWidget(self.lnk_activity, alignment=Qt.AlignmentFlag.AlignCenter)
         self._import_queue = []      # tareas en cola: ("import", carpeta, destino) o ("camera", modo)
         self._current_title = ""
@@ -6402,11 +6455,12 @@ class SyncTabWidget(QWidget):
     def _open_progress(self, title):
         self.sync_popup.hide()
         self._current_title = title
+        self.activity_progress.emit(0.0)
         self.progress_panel.start(title, self.sync_worker, queued=len(self._import_queue))
         self.activity_page.set_running(True)
         self.lnk_activity.setText(tr(self.lang, "activity_view"))
         self._refresh_queue()
-        self.lnk_activity.show()
+        self.lnk_activity.setVisible(self._camera_task_running)
 
     def show_progress(self):
         self.progress_panel.show()
@@ -6433,7 +6487,6 @@ class SyncTabWidget(QWidget):
         if _is_same_or_inside(folder, target) or _is_same_or_inside(target, folder):
             show_toast(self, tr(self.lang, "import_same_as_target"))
             return
-        self.btn_sync.start_sync_visual()
         self.sync_popup.setText(tr(self.lang, "import_searching", folder=folder))
         self.sync_popup.show()
         self.sync_worker = SyncWorkerThread(
@@ -6442,7 +6495,7 @@ class SyncTabWidget(QWidget):
         )
         self.sync_worker.progress.connect(self.on_sync_progress)
         self.sync_worker.finished_sync.connect(self.on_sync_done)
-        self.btn_sync.busy_label = tr(self.lang, "busy_importing")
+        self._camera_task_running = False
         self._open_progress(tr(self.lang, "sync_title_import_from", folder=folder))
         self.sync_worker.start()
 
@@ -6476,12 +6529,17 @@ class SyncTabWidget(QWidget):
         self.sync_worker.finished_sync.connect(self.on_sync_done)
         device = LAST_DEVICE_NAME.get("name") or GOPRO_MODELS.get(self._current_model or "", {}).get("display", "GoPro")
         self.btn_sync.busy_label = tr(self.lang, "busy_syncing")
+        self._camera_task_running = True
         self._open_progress(tr(self.lang, "sync_title_camera", device=device))
         self.sync_worker.start()
 
     @Slot(int, int, str, float)
     def on_sync_progress(self, current, total, name, file_pct):
         if not name.startswith("__CLEANUP__") and self.progress_panel.sizes:
+            total_pct = self.progress_panel.total_percent(current, file_pct)
+            self.activity_progress.emit(total_pct)
+            if not self._camera_task_running:
+                return   # importando una carpeta: el boton de la camara sigue libre
             # El boton muestra el progreso TOTAL (no el del archivo, que vuelve a 0 con cada uno)
             # sin animacion: llegan muchas actualizaciones por segundo y la
             # animacion reiniciada en cada una dejaba el boton atrasado
@@ -6496,10 +6554,14 @@ class SyncTabWidget(QWidget):
     @Slot(bool, str, dict)
     def on_sync_done(self, success, message, stats):
         self.btn_sync.set_idle(self.gopro_connected)
+        was_camera = self._camera_task_running
+        self._camera_task_running = False
+        self.activity_progress.emit(None)
         self.activity_page.add_history(self._current_title, message, stats)
         self.activity_page.set_running(False)
         self.progress_panel.hide()
         self.lnk_activity.setText(f"{message}   ·   {tr(self.lang, 'activity_view')}")
+        self.lnk_activity.setVisible(was_camera)
         # Si hay tareas en cola, sigue con la proxima.
         if self._import_queue and not stats.get("cancelled"):
             task = self._import_queue.pop(0)
@@ -7422,6 +7484,46 @@ class SyncProgressPanel(QFrame):
         self.btn_cancel.setEnabled(False)
         self.lbl_file.setText(tr(self.lang, "sync_cancelling"))
         self.cancel_requested.emit()
+
+
+class ActivityNavButton(QPushButton):
+    """Item "Actividad" del menu: mientras hay una copia en curso se rellena
+    de fondo segun el progreso total y muestra el porcentaje."""
+
+    def __init__(self, text, parent=None):
+        super().__init__(text, parent)
+        self._pct = None
+        self._accent = QColor("#00f2fe")
+
+    def set_progress(self, pct, accent=None):
+        self._pct = pct
+        if accent:
+            self._accent = QColor(accent)
+        self.update()
+
+    def paintEvent(self, event):
+        if self._pct is not None:
+            p = QPainter(self)
+            p.setRenderHint(QPainter.RenderHint.Antialiasing)
+            r = QRectF(self.rect()).adjusted(1, 1, -1, -1)
+            path = QPainterPath()
+            path.addRoundedRect(r, 10, 10)
+            p.setClipPath(path)
+            p.fillRect(r, QColor(255, 255, 255, 14))
+            fill = QColor(self._accent)
+            fill.setAlpha(70)
+            p.fillRect(QRectF(r.left(), r.top(), r.width() * max(0.0, min(100.0, self._pct)) / 100.0, r.height()), fill)
+            p.end()
+        super().paintEvent(event)
+        if self._pct is not None:
+            p = QPainter(self)
+            p.setPen(QColor(255, 255, 255, 220))
+            f = p.font()
+            f.setBold(True)
+            p.setFont(f)
+            p.drawText(self.rect().adjusted(0, 0, -14, 0),
+                       Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, f"{self._pct:.0f}%")
+            p.end()
 
 
 class ActivityPage(QWidget):
@@ -8576,7 +8678,7 @@ class MainWindow(QWidget):
         sidebar_layout.addWidget(self.btn_nav_sync)
         sidebar_layout.addWidget(self.btn_nav_videos)
         sidebar_layout.addWidget(self.btn_nav_pictures)
-        self.btn_nav_activity = QPushButton(tr(self.lang, "nav_activity"))
+        self.btn_nav_activity = ActivityNavButton(tr(self.lang, "nav_activity"))
         self.btn_nav_activity.setCheckable(True)
         sidebar_layout.addWidget(self.btn_nav_activity)
         sidebar_layout.addStretch()
@@ -8617,6 +8719,8 @@ class MainWindow(QWidget):
         self.pages.addWidget(self.pictures_page)
         self.ACTIVITY_INDEX = self.pages.addWidget(self.sync_page.activity_page)
         self.sync_page.activity_requested.connect(self.show_activity)
+        self.sync_page.activity_progress.connect(
+            lambda pct: self.btn_nav_activity.set_progress(pct, self.get_current_theme_color()))
 
         # Assistent nur bauen, wenn er tatsaechlich noch gebraucht wird -
         # spart bei jedem normalen Start (nach der ersten Einrichtung) das
