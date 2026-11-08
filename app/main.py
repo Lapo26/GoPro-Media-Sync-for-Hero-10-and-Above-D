@@ -2794,6 +2794,27 @@ def get_media_capture_date(path, mvhd_local=False):
     return dt
 
 
+# --- [ DETECCION DE DUPLICADOS ] ---
+
+_DUP_SUFFIX_RE = re.compile(r"^(.*)_(\d+)(\.[^.]+)$")
+
+
+def index_existing(index, name, value):
+    """Registra un archivo del destino para detectar duplicados. Clave sin
+    distinguir mayusculas (como Windows). Si se llama "GOPR0001_1.MP4" (copia
+    renombrada por choque de nombres) se registra TAMBIEN como "gopr0001.mp4",
+    asi la proxima sincronizacion lo reconoce y no crea "_2", "_3"..."""
+    low = name.lower()
+    index.setdefault(low, []).append(value)
+    m = _DUP_SUFFIX_RE.match(low)
+    if m:
+        index.setdefault(m.group(1) + m.group(3), []).append(value)
+
+
+def existing_candidates(index, name):
+    return index.get(name.lower(), [])
+
+
 # --- [ CARPETAS ESTILO QUIK ] ---
 
 def quik_camera_folder(target_dir, device_name, existing_paths=()):
@@ -3143,7 +3164,7 @@ class SyncWorkerThread(QThread):
         existing_index = {}
         for root, _dirs, files in os.walk(self.target_dir):
             for f in files:
-                existing_index.setdefault(f, []).append(os.path.join(root, f))
+                index_existing(existing_index, f, os.path.join(root, f))
 
         copied = errors = deleted = 0
         to_delete = []
@@ -3154,7 +3175,7 @@ class SyncWorkerThread(QThread):
             self.progress.emit(idx, total, name, 0.0)
 
             already = False
-            for existing_path in existing_index.get(name, []):
+            for existing_path in existing_candidates(existing_index, name):
                 try:
                     if os.path.getsize(existing_path) == size:
                         already = True
@@ -3188,7 +3209,7 @@ class SyncWorkerThread(QThread):
 
             if self._copy_file_with_progress(src, dest, idx, total, name, size):
                 copied += 1
-                existing_index.setdefault(name, []).append(dest)
+                index_existing(existing_index, os.path.basename(dest), dest)
                 self.progress.emit(idx, total, name, 100.0)
                 if self.delete_after:
                     to_delete.append(src)
@@ -3432,7 +3453,7 @@ class SyncWorkerThread(QThread):
         existing_index = {}
         for root, _dirs, files in os.walk(self.target_dir):
             for f in files:
-                existing_index.setdefault(f, []).append(os.path.join(root, f))
+                index_existing(existing_index, f, os.path.join(root, f))
         cam_folder = quik_camera_folder(self.target_dir, self.device_name,
                                         [p for paths in existing_index.values() for p in paths])
 
@@ -3455,7 +3476,7 @@ class SyncWorkerThread(QThread):
             # Ist diese Datei (gleicher Name + gleiche Groesse) schon
             # IRGENDWO im Zielordner vorhanden - egal ob direkt im Root
             # oder in einem Datums-Unterordner von einem frueheren Sync?
-            for existing_path in existing_index.get(name, []):
+            for existing_path in existing_candidates(existing_index, name):
                 try:
                     if size and os.path.getsize(existing_path) == size:
                         skip_copy = True
@@ -3553,7 +3574,7 @@ class SyncWorkerThread(QThread):
                 # Damit ein und dieselbe Datei (z.B. bei zwei identisch
                 # benannten Eintraegen im selben Sync-Lauf) nicht doppelt
                 # heruntergeladen wird, den Index sofort aktualisieren.
-                existing_index.setdefault(name, []).append(final_path)
+                index_existing(existing_index, os.path.basename(final_path), final_path)
 
                 if self.delete_after:
                     to_delete_by_folder.setdefault(folder_key, []).append(name)
@@ -6473,7 +6494,7 @@ def scan_import_source(source, target):
         for root, _d, names in os.walk(target):
             for n in names:
                 try:
-                    existing.setdefault(n, set()).add(os.path.getsize(os.path.join(root, n)))
+                    index_existing(existing, n, os.path.getsize(os.path.join(root, n)))
                 except OSError:
                     pass
     info = {"photos": 0, "videos": 0, "bytes": 0, "new": 0, "existing": 0, "new_bytes": 0}
@@ -6489,7 +6510,7 @@ def scan_import_source(source, target):
                 continue
             info["photos" if low.endswith(photo_exts) else "videos"] += 1
             info["bytes"] += size
-            if size in existing.get(n, ()):
+            if size in existing_candidates(existing, n):
                 info["existing"] += 1
             else:
                 info["new"] += 1
