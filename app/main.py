@@ -116,7 +116,7 @@ GOPRO_MODELS = {
     # "HERO5 Black" / "HERO5 Session" (siempre MTP, no tiene ajuste de modo
     # USB). "mvhd_local": la HERO5 guarda la fecha del MP4 en hora LOCAL y
     # no en UTC como las camaras nuevas - ver get_media_capture_date().
-    "HERO5":  {"display": "HERO 5",        "video": "GoPro Hero 5.mp4", "mvhd_local": True},
+    "HERO5":  {"display": "HERO 5 BLACK",  "video": "GoPro Hero 5.mp4", "mvhd_local": True},
     # Tarjeta microSD de una GoPro en un lector de tarjetas, cuyo modelo no
     # se pudo leer de MISC\version.txt.
     "SD":     {"display": "GOPRO SD",      "video": "GoPro SD.mp4"},
@@ -157,6 +157,8 @@ GLOBAL_CACHED_BATTERY = None
 #   sd_root -> letra de unidad (p.ej. "E:\\") si la fuente es una tarjeta SD
 #              en un lector; None si la camara esta conectada por USB/MTP.
 ACTIVE_SOURCE = {"model": None, "sd_root": None}
+# Nombre real de la camara tal como la ve Windows / la tarjeta, p. ej. "HERO5 Black".
+LAST_DEVICE_NAME = {"name": None}
 # Activo mientras un SyncWorkerThread esta copiando (pausa las consultas de estado).
 SYNC_IN_PROGRESS = threading.Event()
 
@@ -230,6 +232,8 @@ DEFAULT_CONFIG = {
     "language": _system_language(),  # "es", "en" o "de" - ver TRANSLATIONS
     "language_chosen": False,  # True cuando el usuario eligio idioma (asistente o dialogo)
     "sort_into_date_folders": True,  # Dateien beim Sync in YYYY-MM-DD-Unterordner einsortieren
+    "camera_images": {},        # foto propia por modelo, p. ej. {"HERO5": "...\\HERO5.jpg"}
+    "thumb_cache_dir": "",      # vacio = %APPDATA%\\GoProSyncPro\\thumb_cache
     "backup_dirs": [],          # Respaldos: carpetas en discos externos que reciben una copia del destino
     "backup_after_sync": True,  # Respaldar automaticamente al terminar cada sincronizacion
     "ui_sound_volume": 70,    # 0-100, Lautstaerke fuer Boot/Klick/Fertig-Sounds
@@ -284,6 +288,13 @@ TRANSLATIONS = {
         "ps_start_failed": "Konnte PowerShell nicht starten: {e}",
         "sync_failed_detail": "Sync fehlgeschlagen: {detail}",
         "sd_not_readable": "SD-Karte {root} konnte nicht gelesen werden.",
+        "camera_photo_btn": "🖼  Kamerafoto ändern",
+        "camera_photo_title": "Foto deiner Kamera wählen",
+        "thumb_cache_label": "Vorschaubild-Cache",
+        "thumb_cache_btn": "Ort ändern",
+        "thumb_cache_hint": "Hier werden die Galerie-Vorschaubilder gespeichert. Vorhandene werden beim Ändern mitverschoben.",
+        "thumb_cache_title": "Ordner für den Vorschaubild-Cache wählen",
+        "thumb_cache_moved": "Cache verschoben: {n} Vorschaubilder",
         "section_backup": "BACKUP AUF EXTERNE LAUFWERKE",
         "backup_hint": "Der Zielordner wird zusätzlich in diese Ordner kopiert (nur neue/geänderte Dateien, Datumsangaben bleiben erhalten). Im Backup wird nie etwas gelöscht. Nicht angeschlossene Laufwerke werden übersprungen.",
         "backup_add_btn": "Hinzufügen",
@@ -337,7 +348,7 @@ TRANSLATIONS = {
         "section_folder": "📁  Speicherort",
         "choose_folder_btn": "Ordner wählen",
         "folder_hint": "Hierhin werden synchronisierte Bilder und Videos gespeichert.",
-        "sort_date_folders_checkbox": "In Datums-Ordnern sortieren (YYYY-MM-DD)",
+        "sort_date_folders_checkbox": "Nach Datum und Kamera sortieren, wie Quik (JJJJ-MM-TT\\HERO5 Black 1)",
         "sort_date_folders_hint": "Nutzt das Aufnahmedatum aus den Metadaten der Datei (EXIF/Video), nicht das Kopierdatum.",
         "section_sounds": "🔊  UI-Sounds",
         "sound_volume_label": "Lautstärke",
@@ -407,6 +418,13 @@ TRANSLATIONS = {
         "ps_start_failed": "Could not start PowerShell: {e}",
         "sync_failed_detail": "Sync failed: {detail}",
         "sd_not_readable": "Could not read SD card {root}.",
+        "camera_photo_btn": "🖼  Change camera photo",
+        "camera_photo_title": "Choose a photo of your camera",
+        "thumb_cache_label": "Thumbnail cache",
+        "thumb_cache_btn": "Change location",
+        "thumb_cache_hint": "Gallery thumbnails are stored here. Existing ones are moved when you change it.",
+        "thumb_cache_title": "Choose a folder for the thumbnail cache",
+        "thumb_cache_moved": "Cache moved: {n} thumbnails",
         "section_backup": "BACKUP TO EXTERNAL DRIVES",
         "backup_hint": "The target folder is also copied to these folders (new/changed files only, dates preserved). Nothing is ever deleted in a backup. Drives that are not plugged in are skipped.",
         "backup_add_btn": "Add",
@@ -460,7 +478,7 @@ TRANSLATIONS = {
         "section_folder": "📁  Save location",
         "choose_folder_btn": "Choose folder",
         "folder_hint": "Synced pictures and videos are saved here.",
-        "sort_date_folders_checkbox": "Sort into date folders (YYYY-MM-DD)",
+        "sort_date_folders_checkbox": "Sort by date and camera, like Quik (YYYY-MM-DD\\HERO5 Black 1)",
         "sort_date_folders_hint": "Uses the capture date from the file's own metadata (EXIF/video), not the copy date.",
         "section_sounds": "🔊  UI sounds",
         "sound_volume_label": "Volume",
@@ -530,6 +548,13 @@ TRANSLATIONS = {
         "ps_start_failed": "No se pudo iniciar PowerShell: {e}",
         "sync_failed_detail": "Falló la sincronización: {detail}",
         "sd_not_readable": "No se pudo leer la tarjeta SD {root}.",
+        "camera_photo_btn": "🖼  Cambiar foto de la cámara",
+        "camera_photo_title": "Elegir una foto de tu cámara",
+        "thumb_cache_label": "Caché de miniaturas",
+        "thumb_cache_btn": "Cambiar ubicación",
+        "thumb_cache_hint": "Aquí se guardan las miniaturas de la galería. Al cambiarla, las existentes se mueven al nuevo lugar.",
+        "thumb_cache_title": "Elegir carpeta para la caché de miniaturas",
+        "thumb_cache_moved": "Caché movida: {n} miniaturas",
         "section_backup": "RESPALDO EN DISCOS EXTERNOS",
         "backup_hint": "La carpeta de destino se copia también a estas carpetas (solo archivos nuevos o modificados, conservando las fechas). En el respaldo nunca se borra nada. Los discos que no estén conectados se saltan.",
         "backup_add_btn": "Agregar",
@@ -583,7 +608,7 @@ TRANSLATIONS = {
         "section_folder": "📁  Ubicación",
         "choose_folder_btn": "Elegir carpeta",
         "folder_hint": "Aquí se guardan las fotos y videos sincronizados.",
-        "sort_date_folders_checkbox": "Ordenar en carpetas por fecha (AAAA-MM-DD)",
+        "sort_date_folders_checkbox": "Ordenar por fecha y cámara, como Quik (AAAA-MM-DD\\HERO5 Black 1)",
         "sort_date_folders_hint": "Usa la fecha de captura guardada en el propio archivo (EXIF/video), no la fecha de copia.",
         "section_sounds": "🔊  Sonidos de la interfaz",
         "sound_volume_label": "Volumen",
@@ -1529,6 +1554,10 @@ def detect_connected_gopro_model():
     oder None, falls keine unterstuetzte GoPro gefunden wurde."""
     try:
         names = _DEVICE_PROBE.names()
+        for line in names.splitlines():
+            if any(model in line for model in GOPRO_MODEL_ORDER):
+                LAST_DEVICE_NAME["name"] = line.strip()
+                break
         for model in GOPRO_MODEL_ORDER:
             if model in names:
                 return model
@@ -1550,6 +1579,7 @@ def _model_from_version_txt(root):
     m = re.search(r'"camera type"\s*:\s*"([^"]+)"', text, re.IGNORECASE)
     if not m:
         return None
+    LAST_DEVICE_NAME["name"] = m.group(1).strip()
     cam = m.group(1).upper()
     for model in GOPRO_MODEL_ORDER:
         if model in cam:
@@ -1706,6 +1736,81 @@ async def _ble_read_battery_async(name_match="HERO11", timeout=6.0):
             return int(value[0])
     return None
 
+_WPD = None
+
+
+def _wpd_modules():
+    """Carga (una vez) las interfaces de Windows Portable Devices via comtypes."""
+    global _WPD
+    if _WPD is None:
+        import comtypes.client
+        comtypes.client.GetModule("portabledeviceapi.dll")
+        comtypes.client.GetModule("portabledevicetypes.dll")
+        from comtypes.gen import PortableDeviceApiLib, PortableDeviceTypesLib
+        _WPD = (PortableDeviceApiLib, PortableDeviceTypesLib)
+    return _WPD
+
+
+def read_battery_via_wpd(name_match):
+    """Nivel de bateria via MTP estandar (WPD_DEVICE_POWER_LEVEL), como lo ve
+    Windows. Funciona con la HERO5 (que no lo da por la Shell ni por
+    Bluetooth) y es instantaneo. Devuelve 0-100 o None."""
+    if os.name != "nt" or not name_match:
+        return None
+    try:
+        import comtypes
+        import comtypes.client
+        from comtypes import GUID
+        from ctypes import POINTER, byref, c_ulong, cast
+    except Exception:
+        return None
+    comtypes.CoInitialize()   # este codigo corre en un hilo de fondo
+    try:
+        api, types = _wpd_modules()
+        props_guid = GUID("{26D4979A-E643-4626-9E2B-736DC0C92FDC}")   # WPD_DEVICE_PROPERTIES_V1
+
+        def pkey(pid):
+            k = api._tagpropertykey()
+            k.fmtid = props_guid
+            k.pid = pid
+            return k
+
+        mgr = comtypes.client.CreateObject(GUID("{0af10cec-2ecd-4b92-9581-34f6ae0637f3}"),
+                                           interface=api.IPortableDeviceManager)
+        mgr.RefreshDeviceList()
+        cnt = c_ulong(0)
+        mgr._IPortableDeviceManager__com_GetDevices(None, byref(cnt))
+        arr = (comtypes.c_wchar_p * cnt.value)()
+        mgr._IPortableDeviceManager__com_GetDevices(cast(arr, POINTER(comtypes.c_wchar_p)), byref(cnt))
+        for dev_id in list(arr):
+            dev = comtypes.client.CreateObject(GUID("{728a21c5-3d9e-48d7-9810-864848f0f404}"),
+                                               interface=api.IPortableDevice)
+            client = comtypes.client.CreateObject(GUID("{0c15d503-d017-47ce-9016-7b3f978721cc}"),
+                                                  interface=types.IPortableDeviceValues)
+            try:
+                dev.Open(dev_id, client)
+                vals = dev.Content().Properties().GetValues("DEVICE", None)
+                name = vals.GetStringValue(byref(pkey(12)))          # WPD_DEVICE_FRIENDLY_NAME
+                if name_match.lower() in (name or "").lower():
+                    level = vals.GetUnsignedIntegerValue(byref(pkey(4)))   # WPD_DEVICE_POWER_LEVEL
+                    return max(0, min(100, int(level)))
+            except Exception:
+                pass
+            finally:
+                try:
+                    dev.Close()
+                except Exception:
+                    pass
+    except Exception as e:
+        print("[WPD] no se pudo leer la bateria:", e)
+    finally:
+        try:
+            comtypes.CoUninitialize()
+        except Exception:
+            pass
+    return None
+
+
 def read_battery_via_ble(model=None):
     """Liest den Akkustand per Bluetooth LE (siehe Erklärung oben). Läuft
     synchron in einem eigenen kleinen Event-Loop - wird ausschließlich im
@@ -1802,11 +1907,18 @@ def _read_gopro_status_mtp(write_diag=True, model=None):
     # Para ella se usan directamente las columnas MTP (paso 3).
     legacy_model = model == "HERO5"
 
-    # 1) Bluetooth LE (bevorzugt - kein Moduswechsel nötig)
+    # 0) MTP estandar via WPD (instantaneo; la HERO5 solo la informa por aqui)
     try:
-        battery_pct = None if legacy_model else read_battery_via_ble(model=model)
+        battery_pct = read_battery_via_wpd(model)
     except Exception:
         battery_pct = None
+
+    # 1) Bluetooth LE (bevorzugt - kein Moduswechsel nötig)
+    if battery_pct is None:
+        try:
+            battery_pct = None if legacy_model else read_battery_via_ble(model=model)
+        except Exception:
+            battery_pct = None
 
     # 2) Open GoPro HTTP über USB (nur falls Kamera zufällig im Wired-Control-Modus ist)
     if battery_pct is None and not legacy_model:
@@ -2542,6 +2654,24 @@ def get_media_capture_date(path, mvhd_local=False):
     return dt
 
 
+# --- [ CARPETAS ESTILO QUIK ] ---
+
+def quik_camera_folder(target_dir, device_name, existing_paths=()):
+    """GoPro Quik guardaba en FECHA\\<camara> <n>\\archivo, p. ej.
+    2017-07-11\\HERO5 Black 1\\GOPR0007.JPG. Reutiliza el numero que ya
+    exista en la biblioteca para esa camara; si no hay, usa 1."""
+    if not device_name:
+        return None
+    pat = re.compile(r"^" + re.escape(device_name) + r" (\d+)$", re.IGNORECASE)
+    counts = {}
+    for path in existing_paths:
+        m = pat.match(os.path.basename(os.path.dirname(path)))
+        if m:
+            counts[m.group(1)] = counts.get(m.group(1), 0) + 1
+    num = max(counts, key=counts.get) if counts else "1"
+    return f"{device_name} {num}"
+
+
 # --- [ COPIA CON ATRIBUTOS (SD y respaldos) ] ---
 
 _COPY_CHUNK = 4 * 1024 * 1024
@@ -2729,6 +2859,7 @@ class SyncWorkerThread(QThread):
         self.model = ACTIVE_SOURCE.get("model")
         self.sd_root = ACTIVE_SOURCE.get("sd_root")
         self.mvhd_local = bool(GOPRO_MODELS.get(self.model or "", {}).get("mvhd_local"))
+        self.device_name = LAST_DEVICE_NAME.get("name")
 
     # ------------------------------------------------------------------
     # Sincronizacion desde TARJETA SD (lector de tarjetas / unidad normal)
@@ -2833,6 +2964,8 @@ class SyncWorkerThread(QThread):
 
         copied = errors = deleted = 0
         to_delete = []
+        cam_folder = quik_camera_folder(self.target_dir, self.device_name,
+                                        [p for paths in existing_index.values() for p in paths])
 
         for idx, (src, name, size) in enumerate(items, start=1):
             self.progress.emit(idx, total, name, 0.0)
@@ -2855,6 +2988,8 @@ class SyncWorkerThread(QThread):
             dest_dir = self.target_dir
             if self.sort_into_date_folders:
                 dest_dir = os.path.join(self.target_dir, self._sd_capture_date(src).strftime("%Y-%m-%d"))
+                if cam_folder:
+                    dest_dir = os.path.join(dest_dir, cam_folder)
             try:
                 os.makedirs(dest_dir, exist_ok=True)
             except Exception:
@@ -3115,6 +3250,8 @@ class SyncWorkerThread(QThread):
         for root, _dirs, files in os.walk(self.target_dir):
             for f in files:
                 existing_index.setdefault(f, []).append(os.path.join(root, f))
+        cam_folder = quik_camera_folder(self.target_dir, self.device_name,
+                                        [p for paths in existing_index.values() for p in paths])
 
         # --- Phase 2 + 3: pro Datei einzeln vergleichen und ggf. kopieren ---
         for idx, entry in enumerate(items, start=1):
@@ -3210,6 +3347,8 @@ class SyncWorkerThread(QThread):
                         capture_dt = get_media_capture_date(root_dest_path, mvhd_local=self.mvhd_local)
                         date_folder = capture_dt.strftime("%Y-%m-%d")
                         dated_dir = os.path.join(self.target_dir, date_folder)
+                        if cam_folder:
+                            dated_dir = os.path.join(dated_dir, cam_folder)
                         os.makedirs(dated_dir, exist_ok=True)
                         target_path = os.path.join(dated_dir, dest_name)
                         if os.path.exists(target_path):
@@ -3296,6 +3435,39 @@ class SyncWorkerThread(QThread):
 
 
 # --- [ UI KOMPONENTEN ] ---
+
+class CameraImageView(QWidget):
+    """Foto/ilustracion de la camara (modelos sin video propio, p. ej. HERO5),
+    recortada tipo "cover" con esquinas redondeadas y nitida en HiDPI."""
+
+    def __init__(self, radius=24, parent=None):
+        super().__init__(parent)
+        self._radius = radius
+        self._source = QPixmap()
+        self._scaled = None
+
+    def set_image(self, path):
+        self._source = QPixmap(path) if path and os.path.exists(path) else QPixmap()
+        self._scaled = None
+        self.update()
+
+    def resizeEvent(self, event):
+        self._scaled = None
+        super().resizeEvent(event)
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+        path = QPainterPath()
+        path.addRoundedRect(QRectF(self.rect()), self._radius, self._radius)
+        painter.setClipPath(path)
+        painter.fillRect(self.rect(), QColor(20, 20, 26))
+        if not self._source.isNull():
+            if self._scaled is None:
+                self._scaled = cover_scaled_pixmap(self._source, self.size(), screen_dpr(self))
+            painter.drawPixmap(0, 0, self._scaled)
+
 
 class RoundedVideoContainer(QWidget):
     """
@@ -4091,6 +4263,82 @@ def draw_play_badge(image):
     return result
 
 
+DEFAULT_THUMB_CACHE_DIR = os.path.join(CONFIG_DIR, "thumb_cache")
+
+
+def set_thumb_cache_dir(path):
+    ThumbnailLoaderThread.CACHE_DIR = path or DEFAULT_THUMB_CACHE_DIR
+
+
+def move_thumb_cache(old_dir, new_dir):
+    """Mueve las miniaturas existentes a la nueva ubicacion. Devuelve cuantas."""
+    moved = 0
+    os.makedirs(new_dir, exist_ok=True)
+    if os.path.isdir(old_dir) and os.path.normcase(os.path.abspath(old_dir)) != os.path.normcase(os.path.abspath(new_dir)):
+        for name in os.listdir(old_dir):
+            src = os.path.join(old_dir, name)
+            if os.path.isfile(src) and name.endswith(".jpg"):
+                try:
+                    shutil.move(src, os.path.join(new_dir, name))
+                    moved += 1
+                except Exception:
+                    pass
+        try:
+            os.rmdir(old_dir)
+        except OSError:
+            pass
+    return moved
+
+
+# Un solo hilo lee del disco a la vez: en discos mecanicos (HDD), que las
+# fotos y los videos se lean en paralelo hace que el cabezal salte sin parar.
+_DISK_LOCK = threading.Lock()
+
+
+def read_exif_thumbnail(path, max_bytes=64 * 1024):
+    """Miniatura JPEG incrustada en el EXIF (las GoPro la guardan). Solo lee
+    el principio del archivo (unos KB), no la foto entera de varios MB."""
+    try:
+        with open(path, "rb") as f:
+            head = f.read(max_bytes)
+        if head[:2] != b"\xff\xd8":
+            return None
+        pos = 2
+        while pos + 4 <= len(head):
+            if head[pos] != 0xFF:
+                return None
+            marker = head[pos + 1]
+            seg_len = struct.unpack(">H", head[pos + 2:pos + 4])[0]
+            if marker == 0xE1 and head[pos + 4:pos + 10] == b"Exif\x00\x00":
+                tiff = head[pos + 10:pos + 2 + seg_len]
+                bo = "<" if tiff[:2] == b"II" else ">"
+                ifd0 = struct.unpack(bo + "I", tiff[4:8])[0]
+                n0 = struct.unpack(bo + "H", tiff[ifd0:ifd0 + 2])[0]
+                ifd1 = struct.unpack(bo + "I", tiff[ifd0 + 2 + 12 * n0:ifd0 + 6 + 12 * n0])[0]
+                if not ifd1:
+                    return None
+                n1 = struct.unpack(bo + "H", tiff[ifd1:ifd1 + 2])[0]
+                off = length = None
+                for i in range(n1):
+                    e = tiff[ifd1 + 2 + 12 * i: ifd1 + 14 + 12 * i]
+                    tag = struct.unpack(bo + "H", e[:2])[0]
+                    val = struct.unpack(bo + "I", e[8:12])[0]
+                    if tag == 0x0201:
+                        off = val
+                    elif tag == 0x0202:
+                        length = val
+                if off and length:
+                    img = QImage.fromData(tiff[off:off + length])
+                    return None if img.isNull() else img
+                return None
+            if marker in (0xDA, 0xD9):
+                return None
+            pos += 2 + seg_len
+    except Exception:
+        return None
+    return None
+
+
 class ThumbnailLoaderThread(QThread):
     """Erzeugt die Vorschaubilder fuer eine Galerie (Videos ODER Bilder) in
     einem Hintergrund-Thread, statt die Oberflaeche waehrend dessen
@@ -4117,7 +4365,7 @@ class ThumbnailLoaderThread(QThread):
     # primer fotograma de cada video). Ahora se guarda una version reducida
     # (clave = ruta + tamano + fecha) y las siguientes cargas son casi
     # instantaneas.
-    CACHE_DIR = os.path.join(CONFIG_DIR, "thumb_cache")
+    CACHE_DIR = DEFAULT_THUMB_CACHE_DIR   # se cambia con set_thumb_cache_dir()
     CACHE_W, CACHE_H = THUMB_W * 2, THUMB_H * 2   # 2x: nitidas hasta 200 % de escala
 
     def _cache_path(self, path):
@@ -4128,12 +4376,16 @@ class ThumbnailLoaderThread(QThread):
         key = f"{os.path.normcase(path)}|{st.st_size}|{int(st.st_mtime)}"
         return os.path.join(self.CACHE_DIR, hashlib.sha1(key.encode("utf-8")).hexdigest() + ".jpg")
 
-    def _load_raw(self, path):
+    def _load_cached(self, path):
         cache_file = self._cache_path(path)
         if cache_file and os.path.exists(cache_file):
             img = QImage(cache_file)
             if not img.isNull():
                 return img
+        return None
+
+    def _load_raw(self, path):
+        cache_file = self._cache_path(path)
         if self.kind == "video":
             raw = self._read_video_frame(path)
         else:
@@ -4158,20 +4410,44 @@ class ThumbnailLoaderThread(QThread):
                     pass
         return raw
 
+    def _emit(self, path, raw):
+        cover = make_cover_thumbnail(raw, THUMB_W, THUMB_H, dpr=self.dpr)
+        if self.kind == "video":
+            cover = draw_play_badge(cover)
+        if not self._stop_requested:
+            self.thumbnail_ready.emit(path, cover)
+
     def run(self):
+        # 1) Lo que ya esta en cache, y para las fotos nuevas la miniatura EXIF
+        #    (lee pocos KB): la galeria se llena en segundos.
+        # 2) Despues, la version nitida de lo que faltaba (se guarda en cache);
+        #    la miniatura se reemplaza en su lugar.
+        pending = []
         for path in self.files:
             if self._stop_requested:
                 return
             try:
-                raw = self._load_raw(path)
-                cover = make_cover_thumbnail(raw, THUMB_W, THUMB_H, dpr=self.dpr)
-                if self.kind == "video":
-                    cover = draw_play_badge(cover)
+                img = self._load_cached(path)
+                if img is None and self.kind != "video":
+                    # sin _DISK_LOCK: son pocos KB y no debe esperar a que
+                    # el hilo de videos termine de leer un video entero
+                    img = read_exif_thumbnail(path)
+                    pending.append(path)
+                elif img is None:
+                    pending.append(path)
+                    continue
+                self._emit(path, img)
             except Exception:
                 continue
+        for path in pending:
             if self._stop_requested:
                 return
-            self.thumbnail_ready.emit(path, cover)
+            try:
+                with _DISK_LOCK:
+                    raw = self._load_raw(path)
+                self._emit(path, raw)
+            except Exception:
+                continue
         self.finished_loading.emit()
 
     def _read_video_frame(self, path):
@@ -4474,7 +4750,8 @@ class ClickableThumbnail(QLabel):
             QLabel { border-radius: 12px; outline: none; border: 1px solid rgba(255,255,255,0.08); }
             QLabel:hover { border: 2px solid rgba(255,255,255,0.85); }
         """)
-        add_drop_shadow(self, 22, 6, 70)
+        # Sin QGraphicsDropShadowEffect: con miles de miniaturas cada sombra
+        # se recalculaba en cada repintado y volvia lenta toda la galeria.
 
     def mousePressEvent(self, event):
         if self._on_click: self._on_click()
@@ -4527,6 +4804,14 @@ class GalleryBase(QWidget):
         self.loader_thread = None
         self._loaded_count = 0
         self._cell_for_path = {}
+        # Las miniaturas se agregan a la cuadricula EN TANDAS (cada ~120 ms),
+        # no de a una: con miles de fotos, agregar una por una obligaba a
+        # recalcular/repintar toda la cuadricula cada vez (~1 miniatura/s).
+        self._pending_thumbs = []
+        self._thumb_widgets = {}
+        self._flush_timer = QTimer(self)
+        self._flush_timer.setInterval(120)
+        self._flush_timer.timeout.connect(self._flush_pending_thumbs)
         # Sortierreihenfolge: True = neueste zuerst (Standard), False = aelteste zuerst
         self.sort_newest_first = True
         outer = QVBoxLayout(self)
@@ -4644,9 +4929,10 @@ class GalleryBase(QWidget):
         Aufnahmedatum der Datei abgeleitet), faellt sonst auf das
         Datei-Datum (mtime) zurueck - z.B. fuer Dateien, die noch von vor
         der Datums-Sortierung stammen oder direkt im Root liegen."""
-        parent = os.path.basename(os.path.dirname(path))
-        if re.match(r"^\d{4}-\d{2}-\d{2}$", parent):
-            return parent
+        parent_dir = os.path.dirname(path)
+        for name in (os.path.basename(parent_dir), os.path.basename(os.path.dirname(parent_dir))):
+            if re.match(r"^\d{4}-\d{2}-\d{2}$", name):   # FECHA\\archivo o FECHA\\camara\\archivo
+                return name
         try:
             return datetime.fromtimestamp(os.path.getmtime(path)).strftime("%Y-%m-%d")
         except Exception:
@@ -4737,25 +5023,52 @@ class GalleryBase(QWidget):
         self.loader_thread.start()
 
     def _on_thumbnail_ready(self, path, image):
+        self._pending_thumbs.append((path, image))
+        if not self._flush_timer.isActive():
+            self._flush_timer.start()
+
+    def _flush_pending_thumbs(self):
+        if not self._pending_thumbs:
+            self._flush_timer.stop()
+            return
+        batch, self._pending_thumbs = self._pending_thumbs, []
+        self.scroll.setUpdatesEnabled(False)
+        try:
+            for path, image in batch:
+                self._add_thumbnail(path, image)
+        finally:
+            self.scroll.setUpdatesEnabled(True)
+        self.lbl_loading.setText(f"⏳ {self._loaded_count} / {self._pending_total}")
+
+    def _add_thumbnail(self, path, image):
         pix = QPixmap.fromImage(image)
+        existing = self._thumb_widgets.get(path)
+        if existing is not None:
+            existing.setPixmap(pix)   # version nitida que reemplaza la rapida
+            return
         if self.KIND == "video":
             lbl = ClickableThumbnail(pix, lambda checked=False, p=path: self.play_video(p), tooltip=os.path.basename(path))
         else:
             lbl = ClickableThumbnail(pix, lambda checked=False, p=path: self.open_image(p), tooltip=os.path.basename(path))
         self._loaded_count += 1
+        self._thumb_widgets[path] = lbl
         cell = self._cell_for_path.get(path)
         if cell is not None:
             r, c = cell
             self.grid.addWidget(lbl, r, c)
-        self.lbl_loading.setText(f"⏳ {self._loaded_count} / {self._pending_total}")
 
     def _on_loading_finished(self):
+        self._flush_pending_thumbs()
+        self._flush_timer.stop()
         self.lbl_loading.hide()
         if self._loaded_count == 0:
             self.show_empty()
 
     def refresh(self):
         """Leert das Grid und laedt die Dateien neu (z.B. nach einem Sync oder Ordnerwechsel)."""
+        self._pending_thumbs = []
+        self._thumb_widgets = {}
+        self._flush_timer.stop()
         if self.loader_thread is not None:
             self.loader_thread.stop()
             self.loader_thread.wait(300)
@@ -5068,9 +5381,22 @@ class SyncTabWidget(QWidget):
         self.pan_preview.set_mode("360")
         self.media_stack.addWidget(self.pan_preview)
 
+        # 3: foto/ilustracion para modelos sin video propio (HERO5...)
+        self.camera_image = CameraImageView(radius=24)
+        self.media_stack.addWidget(self.camera_image)
+
         media_wrapper_layout.addWidget(self.media_stack)
 
         media_column.addWidget(self.media_wrapper)
+
+        self.btn_camera_photo = QPushButton(tr(self.lang, "camera_photo_btn"))
+        self.btn_camera_photo.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_camera_photo.setStyleSheet(
+            "QPushButton { background: transparent; color: rgba(255,255,255,0.55); border: none; font-size: 12px; padding: 4px; }"
+            " QPushButton:hover { color: #ffffff; }")
+        self.btn_camera_photo.clicked.connect(self.choose_camera_photo)
+        self.btn_camera_photo.hide()
+        media_column.addWidget(self.btn_camera_photo, alignment=Qt.AlignmentFlag.AlignCenter)
         content_layout.addLayout(media_column)
 
         self.connect_player = QMediaPlayer(self)
@@ -5303,12 +5629,14 @@ class SyncTabWidget(QWidget):
                     self.pan_preview.clear_frame()
                 else:
                     self.connect_player.setVideoOutput(self.rounded_video.video_item)
-                if os.path.exists(clip_path):
+                self._has_model_video = os.path.exists(clip_path)
+                if self._has_model_video:
                     self.connect_player.setSource(QUrl.fromLocalFile(clip_path))
                 else:
-                    # Kein passendes Video im assets-Ordner gefunden - Platzhalter
-                    # anzeigen statt eines leeren/eingefrorenen Videobilds.
+                    # Sin video del modelo: mostrar su foto (la del usuario o
+                    # la ilustracion incluida) en vez de un recuadro vacio.
                     self.connect_player.setSource(QUrl())
+                    self.camera_image.set_image(self._camera_image_path(model))
 
             # Modell-Logo (PNG) statt Text-Titel anzeigen, sofern fuer das
             # erkannte Modell eine Logo-Datei im assets-Ordner existiert.
@@ -5334,7 +5662,12 @@ class SyncTabWidget(QWidget):
                 self.title_label.show()
             if not self.btn_sync.is_syncing:
                 self.btn_sync.set_idle(True)
-            self.media_stack.setCurrentIndex(2 if profile.get("is_360") else 1)
+            if not getattr(self, "_has_model_video", True):
+                self.media_stack.setCurrentIndex(3)
+                self.btn_camera_photo.show()
+            else:
+                self.media_stack.setCurrentIndex(2 if profile.get("is_360") else 1)
+                self.btn_camera_photo.hide()
 
             self.rounded_video.hide_freeze_frame()
             self.connect_player.setPosition(0)
@@ -5358,6 +5691,7 @@ class SyncTabWidget(QWidget):
             self.connect_player.stop()
             self.rounded_video.hide_freeze_frame()
             self.media_stack.setCurrentIndex(0)
+            self.btn_camera_photo.hide()
             self.stat_status.setText(tr(self.lang, "not_connected"))
             self.stat_status.setStyleSheet("color: #ff5c6c; font-size: 15px; font-weight: 800; letter-spacing: 0.6px;")
             self.badge_wifi.set_active(False)
@@ -5366,6 +5700,35 @@ class SyncTabWidget(QWidget):
             self.bar_battery.set_value_and_color(-1, "#333")
             self.bar_storage.set_value_and_color(0, "#333")
             self.lbl_store_detail.setText("")
+
+    def _camera_image_path(self, model):
+        custom = (self.config.get("camera_images") or {}).get(model or "")
+        if custom and os.path.exists(custom):
+            return custom
+        return asset_path("camera_generic.png")
+
+    def choose_camera_photo(self):
+        """Foto propia de la camara para el modelo conectado (se copia a la
+        carpeta de configuracion, asi no depende de donde estaba el archivo)."""
+        model = self._current_model
+        if not model:
+            return
+        path, _ = QFileDialog.getOpenFileName(
+            self, tr(self.lang, "camera_photo_title"), _safe_local_dir(), "*.png *.jpg *.jpeg *.bmp *.webp")
+        if not path:
+            return
+        try:
+            dest_dir = os.path.join(CONFIG_DIR, "camera_images")
+            os.makedirs(dest_dir, exist_ok=True)
+            dest = os.path.join(dest_dir, re.sub(r"[^A-Za-z0-9]+", "_", model) + os.path.splitext(path)[1].lower())
+            shutil.copy2(path, dest)
+        except Exception:
+            dest = path
+        images = dict(self.config.get("camera_images") or {})
+        images[model] = dest
+        self.config["camera_images"] = images
+        save_config(self.config)
+        self.camera_image.set_image(dest)
 
     def choose_folder(self):
         new_dir = QFileDialog.getExistingDirectory(
@@ -6176,8 +6539,8 @@ class SettingsDialog(QDialog):
         self.lang = config.get("language", "de")
         self._settings_sound_played = False
         self.setWindowTitle(f"{tr(self.lang, 'settings_window_title')}  ·  v{APP_VERSION}")
-        self.setMinimumWidth(520)
-        self.resize(520, 760)
+        self.setMinimumWidth(540)
+        self.resize(540, 880)
         accent = config.get("accent_color", "#00f2fe")
         self.setStyleSheet(f"""
             QDialog {{
@@ -6351,6 +6714,25 @@ class SettingsDialog(QDialog):
         sort_hint.setStyleSheet("color: #777; font-size: 11px;")
         sort_hint.setWordWrap(True)
         folder_layout.addWidget(sort_hint)
+
+        # --- Cache de miniaturas ---
+        cache_title = QLabel(tr(self.lang, "thumb_cache_label"))
+        cache_title.setStyleSheet("font-size: 13px; font-weight: 700;")
+        folder_layout.addWidget(cache_title)
+        cache_row = QHBoxLayout()
+        cache_row.setSpacing(12)
+        self.lbl_cache = QLabel(f"🗂  {ThumbnailLoaderThread.CACHE_DIR}")
+        self.lbl_cache.setWordWrap(True)
+        self.lbl_cache.setStyleSheet(self.lbl_folder.styleSheet())
+        self.btn_cache = QPushButton(tr(self.lang, "thumb_cache_btn"))
+        self.btn_cache.clicked.connect(self.pick_cache_dir)
+        cache_row.addWidget(self.lbl_cache, 1)
+        cache_row.addWidget(self.btn_cache)
+        folder_layout.addLayout(cache_row)
+        cache_hint = QLabel(tr(self.lang, "thumb_cache_hint"))
+        cache_hint.setStyleSheet("color: #777; font-size: 11px;")
+        cache_hint.setWordWrap(True)
+        folder_layout.addWidget(cache_hint)
 
         # --- Respaldos en discos externos ---
         divider_backup = QFrame()
@@ -6568,6 +6950,19 @@ class SettingsDialog(QDialog):
         self.config["sort_into_date_folders"] = bool(state)
         save_config(self.config)
 
+    def pick_cache_dir(self):
+        new_dir = QFileDialog.getExistingDirectory(
+            self, tr(self.lang, "thumb_cache_title"), _valid_start_dir(ThumbnailLoaderThread.CACHE_DIR))
+        if not new_dir:
+            return
+        new_dir = os.path.normpath(new_dir)
+        moved = move_thumb_cache(ThumbnailLoaderThread.CACHE_DIR, new_dir)
+        self.config["thumb_cache_dir"] = new_dir
+        save_config(self.config)
+        set_thumb_cache_dir(new_dir)
+        self.lbl_cache.setText(f"🗂  {new_dir}")
+        show_toast(self, tr(self.lang, "thumb_cache_moved", n=moved))
+
     def add_backup_dir(self):
         new_dir = QFileDialog.getExistingDirectory(
             self, tr(self.lang, "backup_choose_title"), _safe_local_dir(),
@@ -6637,6 +7032,7 @@ class MainWindow(QWidget):
     def __init__(self):
         super().__init__()
         self.config = load_config()
+        set_thumb_cache_dir(self.config.get("thumb_cache_dir", ""))
         self.lang = self.config.get("language", "de")
         self.setWindowTitle("GoPro Sync Pro")
         self.setWindowIcon(load_app_icon())
