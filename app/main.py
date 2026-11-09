@@ -309,6 +309,12 @@ TRANSLATIONS = {
         "ps_start_failed": "Konnte PowerShell nicht starten: {e}",
         "sync_failed_detail": "Sync fehlgeschlagen: {detail}",
         "sd_not_readable": "SD-Karte {root} konnte nicht gelesen werden.",
+        "boot_ui": "Oberfläche wird vorbereitet…",
+        "boot_camera": "Kamera wird geladen…",
+        "boot_activity": "Schriften werden geladen…",
+        "boot_galleries": "Galerien werden vorbereitet…",
+        "boot_done": "Fertig",
+        "card_detected": "GoPro-Karte auf {root} erkannt — „SD / Ordner importieren“ zum Kopieren verwenden.",
         "ctx_copy_path": "Pfad kopieren",
         "ctx_show_in_explorer": "Im Explorer anzeigen",
         "ctx_open": "Öffnen",
@@ -552,6 +558,12 @@ TRANSLATIONS = {
         "ps_start_failed": "Could not start PowerShell: {e}",
         "sync_failed_detail": "Sync failed: {detail}",
         "sd_not_readable": "Could not read SD card {root}.",
+        "boot_ui": "Preparing the interface…",
+        "boot_camera": "Loading the camera…",
+        "boot_activity": "Loading fonts…",
+        "boot_galleries": "Preparing galleries…",
+        "boot_done": "Ready",
+        "card_detected": "GoPro card detected on {root} — use “Import SD / folder” to copy it.",
         "ctx_copy_path": "Copy path",
         "ctx_show_in_explorer": "Show in Explorer",
         "ctx_open": "Open",
@@ -795,6 +807,12 @@ TRANSLATIONS = {
         "ps_start_failed": "No se pudo iniciar PowerShell: {e}",
         "sync_failed_detail": "Falló la sincronización: {detail}",
         "sd_not_readable": "No se pudo leer la tarjeta SD {root}.",
+        "boot_ui": "Preparando la interfaz…",
+        "boot_camera": "Cargando la cámara…",
+        "boot_activity": "Cargando fuentes…",
+        "boot_galleries": "Preparando galerías…",
+        "boot_done": "Listo",
+        "card_detected": "Tarjeta GoPro detectada en {root} — usá «Importar SD / carpeta» para copiarla.",
         "ctx_copy_path": "Copiar ruta",
         "ctx_show_in_explorer": "Mostrar en el Explorador",
         "ctx_open": "Abrir",
@@ -1016,34 +1034,60 @@ def tr(lang, key, **kwargs):
     return text
 
 
+def _read_config_file(path):
+    with open(path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    if not isinstance(data, dict):
+        raise ValueError("config no es un objeto")
+    return data
+
+
 def load_config():
-    # HINWEIS: Die Konfiguration liegt bewusst in %APPDATA% statt im
-    # Programmordner. Liegt das Programm z.B. auf dem Desktop, blockiert
-    # Windows (z.B. per "Kontrollierter Ordnerzugriff" im Defender-
-    # Ransomware-Schutz) das Schreiben von Dateien dort oft fuer nicht
-    # explizit erlaubte Programme -> PermissionError. %APPDATA% ist davon
-    # nicht betroffen und genau fuer sowas gedacht.
+    """Lee la configuracion de %APPDATA%\GoProSyncPro. Nunca la pierde:
+    si el archivo principal esta danado (corte de luz a mitad de guardar...)
+    se usa la copia de respaldo .bak, y el archivo danado se conserva aparte
+    en vez de pisarlo con valores por defecto."""
+    backup = CONFIG_FILE + ".bak"
+    for path in (CONFIG_FILE, backup):
+        if os.path.exists(path):
+            try:
+                loaded = _read_config_file(path)
+                merged = dict(DEFAULT_CONFIG)
+                merged.update(loaded)      # se conservan TODAS las claves existentes
+                if path == backup:
+                    print("[Config] Archivo principal danado: se recupero la copia de respaldo.")
+                return merged
+            except Exception:
+                continue
     if os.path.exists(CONFIG_FILE):
         try:
-            with open(CONFIG_FILE, "r", encoding="utf-8") as f:
-                loaded = json.load(f)
-                merged = dict(DEFAULT_CONFIG)
-                merged.update(loaded)
-                return merged
+            os.replace(CONFIG_FILE, CONFIG_FILE + datetime.now().strftime(".danado-%Y%m%d-%H%M%S"))
         except Exception:
             pass
     return dict(DEFAULT_CONFIG)
 
+
 def save_config(config_dict):
+    """Guardado seguro: escribe a un .tmp y lo reemplaza de una vez (nunca
+    queda un archivo a medias) y antes guarda la version anterior en .bak."""
     try:
         os.makedirs(CONFIG_DIR, exist_ok=True)
-        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
-            json.dump(config_dict, f)
+        tmp = CONFIG_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(config_dict, f, ensure_ascii=False, indent=1)
+            f.flush()
+            os.fsync(f.fileno())
+        if os.path.exists(CONFIG_FILE):
+            try:
+                _read_config_file(CONFIG_FILE)          # solo respaldar si esta sano
+                shutil.copy2(CONFIG_FILE, CONFIG_FILE + ".bak")
+            except Exception:
+                pass
+        os.replace(tmp, CONFIG_FILE)
     except Exception as e:
-        # Speichern der Einstellungen darf die App niemals zum Absturz bringen -
-        # im schlimmsten Fall gehen nur die zuletzt geaenderten Einstellungen
-        # (Zielordner/Farbe/Checkbox) beim naechsten Start verloren.
-        print(f"Konnte Konfiguration nicht speichern: {e}")
+        # Guardar la configuracion nunca debe cerrar la app.
+        print(f"No se pudo guardar la configuracion: {e}")
+
 
 def asset_path(filename):
     return os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", filename)
@@ -1996,9 +2040,9 @@ def find_gopro_sd_card():
                 drive_type = kernel32.GetDriveTypeW(root)
             except Exception:
                 drive_type = 0
-            # 2 = DRIVE_REMOVABLE, 3 = DRIVE_FIXED (algunos lectores USB se
-            # presentan como disco fijo). Red, CD, RAM disk -> se ignoran.
-            if drive_type not in (2, 3):
+            # Solo unidades EXTRAIBLES (lector de tarjetas): una carpeta DCIM
+            # copiada en un disco fijo (p. ej. D:\\DCIM) no es una tarjeta.
+            if drive_type != 2:
                 continue
             dcim = os.path.join(root, "DCIM")
             try:
@@ -2020,15 +2064,10 @@ def find_gopro_sd_card():
 
 
 def detect_connected_source():
-    """Primero la camara por USB (MTP); si no hay, una tarjeta SD de GoPro.
-    Devuelve (clave_modelo o None, raiz_sd o None)."""
-    model = detect_connected_gopro_model()
-    if model:
-        return model, None
-    sd_root, sd_model = find_gopro_sd_card()
-    if sd_root:
-        return sd_model, sd_root
-    return None, None
+    """La seccion Camara es SOLO para la GoPro conectada por USB (MTP). Las
+    tarjetas SD se importan desde "Importar SD / carpeta".
+    Devuelve (clave_modelo o None, None)."""
+    return detect_connected_gopro_model(), None
 
 
 def check_gopro_connected():
@@ -2428,6 +2467,7 @@ class DeviceMonitorThread(QThread):
     # nicht verbunden) - siehe GOPRO_MODELS weiter oben.
     connection_changed = Signal(bool, str)
     status_ready = Signal(dict)
+    card_detected = Signal(str)   # tarjeta GoPro insertada en un lector (raiz)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -2445,6 +2485,12 @@ class DeviceMonitorThread(QThread):
 
             model, sd_root = detect_connected_source()
             connected = model is not None
+            # Aviso de tarjeta GoPro insertada (cada ~4 s, solo al aparecer)
+            if cycle % 5 == 0:
+                card_root, _card_model = find_gopro_sd_card()
+                if card_root and card_root != getattr(self, "_last_card", None):
+                    self.card_detected.emit(card_root)
+                self._last_card = card_root
             source_key = (model, sd_root)
             if source_key != self._connected_model:
                 self._connected_model = source_key
@@ -5424,10 +5470,8 @@ class ClickableThumbnail(QLabel):
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         if tooltip: self.setToolTip(tooltip)
         self._on_click = on_click
-        self.setStyleSheet("""
-            QLabel { border-radius: 12px; outline: none; border: 1px solid rgba(255,255,255,0.08); }
-            QLabel:hover { border: 2px solid rgba(255,255,255,0.85); }
-        """)
+        # El estilo (borde y hover) lo define la galeria UNA vez para todas
+        # las miniaturas: con miles, un setStyleSheet por miniatura era lento.
         # Sin QGraphicsDropShadowEffect: con miles de miniaturas cada sombra
         # se recalculaba en cada repintado y volvia lenta toda la galeria.
 
@@ -5558,10 +5602,17 @@ class GalleryBase(QWidget):
         self._relayout_timer.setInterval(250)
         self._relayout_timer.timeout.connect(self._relayout_if_needed)
         self.grid_host = QWidget()
-        self.grid_host.setStyleSheet("background: transparent;")
+        self.grid_host.setStyleSheet(
+            "background: transparent;"
+            " ClickableThumbnail { border-radius: 12px; outline: none; border: 1px solid rgba(255,255,255,0.08); }"
+            " ClickableThumbnail:hover { border: 2px solid rgba(255,255,255,0.85); }")
         self.grid = QGridLayout(self.grid_host)
         self.grid.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
-        self.grid.setSpacing(18)
+        self.grid.setHorizontalSpacing(18)
+        # Sin espaciado vertical automatico (Qt solo lo suma en filas con
+        # contenido, y la cuadricula crecia al ir llegando miniaturas): el
+        # espacio va incluido en la altura reservada de cada fila.
+        self.grid.setVerticalSpacing(0)
         self.scroll.setWidget(self.grid_host)
         outer.addWidget(self.scroll)
 
@@ -5638,7 +5689,7 @@ class GalleryBase(QWidget):
     def _columns_for_width(self):
         """Cuantas miniaturas entran a lo ancho (siempre dejando lugar a la
         barra de scroll vertical, asi nunca aparece la horizontal)."""
-        spacing = self.grid.spacing() if hasattr(self, "grid") else 18
+        spacing = self.grid.horizontalSpacing() if hasattr(self, "grid") else 18
         margins = self.grid.contentsMargins() if hasattr(self, "grid") else None
         extra = (margins.left() + margins.right()) if margins is not None else 18
         avail = self.scroll.viewport().width() - self.scroll.verticalScrollBar().sizeHint().width() - extra - 4
@@ -5827,6 +5878,10 @@ class GalleryBase(QWidget):
         # bekommt seine feste (Zeile, Spalte) zugewiesen und wandert dort
         # hinein, sobald es fertig geladen ist.
         self._cell_for_path = {}
+        self._thumb_widgets = {}
+        self._loaded_paths = set()
+        for c in range(self.col_count):
+            self.grid.setColumnMinimumWidth(c, THUMB_W)
         row = 0
         col_in_row = 0
         current_group_date = None
@@ -5843,9 +5898,14 @@ class GalleryBase(QWidget):
                     "padding-top: 6px;"
                 )
                 self.grid.addWidget(header, row, 0, 1, self.col_count)
+                self.grid.setRowMinimumHeight(row, 40)
                 row += 1
                 col_in_row = 0
             self._cell_for_path[path] = (row, col_in_row)
+            # Reservar el lugar de la miniatura desde ya (alto de fila y ancho
+            # de columna): asi la cuadricula tiene su tamano final antes de que
+            # lleguen las imagenes y no se mueve ni parpadea al ir llenandose.
+            self.grid.setRowMinimumHeight(row, THUMB_H + 18)
             col_in_row += 1
             if col_in_row >= self.col_count:
                 col_in_row = 0
@@ -5872,19 +5932,38 @@ class GalleryBase(QWidget):
             self._flush_timer.stop()
             return
         batch, self._pending_thumbs = self._pending_thumbs, []
-        self.scroll.setUpdatesEnabled(False)
-        try:
-            for path, image in batch:
-                self._add_thumbnail(path, image)
-        finally:
-            self.scroll.setUpdatesEnabled(True)
+        for path, image in batch:
+            self._add_thumbnail(path, image)
         self.lbl_loading.setText(f"⏳ {self._loaded_count} / {self._pending_total}")
+
+    def _placeholder_pixmap(self):
+        dpr = screen_dpr(self)
+        img = QImage(int(THUMB_W * dpr), int(THUMB_H * dpr), QImage.Format.Format_ARGB32_Premultiplied)
+        img.setDevicePixelRatio(dpr)
+        img.fill(Qt.GlobalColor.transparent)
+        p = QPainter(img)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        path = QPainterPath()
+        path.addRoundedRect(0, 0, THUMB_W, THUMB_H, 12, 12)
+        p.fillPath(path, QColor(255, 255, 255, 12))
+        p.end()
+        return QPixmap.fromImage(img)
+
+    def _make_thumb_widget(self, path, pix):
+        if self.KIND == "video":
+            return ClickableThumbnail(pix, lambda checked=False, p=path: self.play_video(p), tooltip=path,
+                                      on_context=lambda pos, p=path: self._show_context_menu(p, pos))
+        return ClickableThumbnail(pix, lambda checked=False, p=path: self.open_image(p), tooltip=path,
+                                  on_context=lambda pos, p=path: self._show_context_menu(p, pos))
 
     def _add_thumbnail(self, path, image):
         pix = QPixmap.fromImage(image)
         existing = self._thumb_widgets.get(path)
         if existing is not None:
-            existing.setPixmap(pix)   # version nitida que reemplaza la rapida
+            existing.setPixmap(pix)   # solo cambia la imagen: la cuadricula no se mueve
+            if path not in self._loaded_paths:
+                self._loaded_paths.add(path)
+                self._loaded_count += 1
             return
         if self.KIND == "video":
             lbl = ClickableThumbnail(pix, lambda checked=False, p=path: self.play_video(p), tooltip=path,
@@ -5897,7 +5976,7 @@ class GalleryBase(QWidget):
         cell = self._cell_for_path.get(path)
         if cell is not None:
             r, c = cell
-            self.grid.addWidget(lbl, r, c)
+            self.grid.addWidget(lbl, r, c, Qt.AlignmentFlag.AlignTop)
 
     def _on_loading_finished(self):
         self._flush_pending_thumbs()
@@ -5917,6 +5996,8 @@ class GalleryBase(QWidget):
         if self.loader_thread is not None:
             self.loader_thread.stop()
             self.loader_thread.wait(300)
+        for r in range(self.grid.rowCount()):
+            self.grid.setRowMinimumHeight(r, 0)    # limpiar reservas de la carga anterior
         while self.grid.count():
             item = self.grid.takeAt(0)
             w = item.widget()
@@ -6246,6 +6327,7 @@ class SyncTabWidget(QWidget):
         media_column.addWidget(self.btn_camera_photo, alignment=Qt.AlignmentFlag.AlignCenter)
         content_layout.addLayout(media_column)
 
+        boot_step(45, "boot_camera")
         self.connect_player = QMediaPlayer(self)
         self.audio_output = QAudioOutput(self)
         self.audio_output.setVolume(0.0) 
@@ -6386,6 +6468,7 @@ class SyncTabWidget(QWidget):
         # un enlace mientras copia / con el ultimo resultado.
         self.progress_panel = SyncProgressPanel(self.lang, self.get_theme_color())
         self.progress_panel.cancel_requested.connect(self.cancel_sync)
+        boot_step(55, "boot_activity")
         self.activity_page = ActivityPage(self.lang, self.get_theme_color())
         self.activity_page.set_panel(self.progress_panel)
         self.activity_page.remove_queued.connect(self.remove_queued)
@@ -9115,6 +9198,7 @@ class SettingsDialog(QDialog):
 class MainWindow(QWidget):
     def __init__(self):
         super().__init__()
+        boot_step(10, "boot_ui")
         self.config = load_config()
         set_thumb_cache_dir(self.config.get("thumb_cache_dir", ""))
         self.lang = self.config.get("language", "de")
@@ -9295,7 +9379,9 @@ class MainWindow(QWidget):
         sidebar_layout.addWidget(self.btn_settings)
 
         self.pages = QStackedWidget()
+        boot_step(30, "boot_camera")
         self.sync_page = SyncTabWidget(self.get_current_theme_color, self.config)
+        boot_step(75, "boot_galleries")
         self.videos_page = VideoGallery(self.sync_page.sync_target_dir, self.lang)
         self.pictures_page = PictureGallery(self.sync_page.sync_target_dir, self.lang)
 
@@ -9304,6 +9390,8 @@ class MainWindow(QWidget):
         self.pages.addWidget(self.pictures_page)
         self.ACTIVITY_INDEX = self.pages.addWidget(self.sync_page.activity_page)
         self.sync_page.activity_requested.connect(self.show_activity)
+        self.sync_page.monitor_thread.card_detected.connect(
+            lambda root: show_toast(self, tr(self.lang, "card_detected", root=root)))
         self.sync_page.activity_progress.connect(
             lambda pct: self.btn_nav_activity.set_progress(pct, self.get_current_theme_color()))
 
@@ -9339,6 +9427,7 @@ class MainWindow(QWidget):
         else:
             self.pages.setCurrentIndex(0)
 
+        boot_step(95, "boot_done")
         self.update_sidebar_theme()
         # Ensure background is applied after layout is set up; schedule to run on next event loop iteration
         QTimer.singleShot(0, self.apply_background)
@@ -9673,10 +9762,17 @@ class AnimatedSplash(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         self.logo_pix = QPixmap(logo_path)
         self._scaled_logo = None   # se genera una vez, a la escala de la pantalla
+        self.progress = 0.0
+        self.status = ""
         self.angle = 0
         self.timer = QTimer(self)
         self.timer.timeout.connect(self._update_spin)
         self.timer.start(16) 
+
+    def set_status(self, pct, text):
+        self.progress = max(self.progress, float(pct))
+        self.status = text
+        self.update()
 
     def _update_spin(self):
         self.angle = (self.angle + 6) % 360
@@ -9702,12 +9798,38 @@ class AnimatedSplash(QWidget):
             y = int((self.height() - size.height()) // 2 - 20)
             painter.drawPixmap(x, y, self._scaled_logo)
             
-        cx, cy = self.width() // 2, self.height() - 60
-        r = 15
-        pen = QPen(QColor(0, 242, 254), 3)
-        pen.setCapStyle(Qt.PenCapStyle.RoundCap)
-        painter.setPen(pen)
-        painter.drawArc(cx - r, cy - r, r * 2, r * 2, -self.angle * 16, 120 * 16)
+        # Barra de progreso del arranque + texto de la etapa
+        if self.progress > 0:
+            bw, bh = 260, 4
+            bx, by = (self.width() - bw) / 2, self.height() - 108
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor(255, 255, 255, 30))
+            painter.drawRoundedRect(QRectF(bx, by, bw, bh), 2, 2)
+            painter.setBrush(QColor(0, 242, 254))
+            painter.drawRoundedRect(QRectF(bx, by, bw * min(100.0, self.progress) / 100.0, bh), 2, 2)
+        if self.status:
+            painter.setPen(QColor(255, 255, 255, 150))
+            f = painter.font()
+            f.setPixelSize(12)
+            painter.setFont(f)
+            painter.drawText(QRectF(0, self.height() - 96, self.width(), 20), Qt.AlignmentFlag.AlignCenter, self.status)
+
+        # Sin spinner: durante la construccion de la ventana Qt no puede
+        # redibujar (p. ej. ~1 s cargando las fuentes) y un spinner quieto
+        # parece colgado. La barra avanza por etapas y nunca "se traba".
+
+
+# Progreso del arranque: main() lo conecta a la pantalla de carga. Entre
+# etapa y etapa se procesan eventos, asi la animacion no se queda trabada.
+BOOT_PROGRESS = None
+
+
+def boot_step(pct, key):
+    if BOOT_PROGRESS is not None:
+        try:
+            BOOT_PROGRESS(pct, key)
+        except Exception:
+            pass
 
 
 def bring_to_front(window):
@@ -9793,8 +9915,19 @@ def main():
         app.processEvents()
         SoundManager.play_boot()
 
+        boot_lang = config.get("language", "es")
+
+        def _boot(pct, key):
+            splash.set_status(pct, tr(boot_lang, key))
+            splash.angle = (splash.angle + 30) % 360
+            app.processEvents()
+
+        global BOOT_PROGRESS
+        BOOT_PROGRESS = _boot
         start_time = time.monotonic()
         window = MainWindow()
+        BOOT_PROGRESS = None
+        splash.set_status(100, tr(boot_lang, "boot_done"))
         build_ms = (time.monotonic() - start_time) * 1000
 
         def _reveal_main_window():
