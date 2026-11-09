@@ -45,7 +45,7 @@ from PySide6.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout, 
                                QStackedWidget, QFrame, QFileDialog, QTabWidget,
                                QGridLayout, QScrollArea, QColorDialog, QGraphicsView, QGraphicsScene, QGraphicsPixmapItem,
                                QSlider, QGraphicsBlurEffect, QMenu, QAbstractButton,
-                               QGraphicsOpacityEffect, QLineEdit, QStackedLayout, QListWidget, QDateEdit, QProgressBar)
+                               QGraphicsOpacityEffect, QLineEdit, QStackedLayout, QListWidget, QDateEdit, QProgressBar, QSystemTrayIcon)
 from PySide6.QtGui import (QGuiApplication, QPixmap, QPainter, QColor, QPainterPath, QImage, 
                            QLinearGradient, QFont, QKeySequence, QShortcut, QRegion, QPen, QIcon, QImageReader)
 # Multimedia
@@ -309,6 +309,10 @@ TRANSLATIONS = {
         "ps_start_failed": "Konnte PowerShell nicht starten: {e}",
         "sync_failed_detail": "Sync fehlgeschlagen: {detail}",
         "sd_not_readable": "SD-Karte {root} konnte nicht gelesen werden.",
+        "tray_open": "GoPro Sync öffnen",
+        "tray_quit": "Beenden",
+        "tray_hidden_msg": "GoPro Sync läuft neben der Uhr weiter. Zum Beenden: Rechtsklick auf das Symbol → Beenden.",
+        "tray_tooltip_busy": "GoPro Sync — {task} {pct}%",
         "boot_ui": "Oberfläche wird vorbereitet…",
         "boot_camera": "Kamera wird geladen…",
         "boot_activity": "Schriften werden geladen…",
@@ -558,6 +562,10 @@ TRANSLATIONS = {
         "ps_start_failed": "Could not start PowerShell: {e}",
         "sync_failed_detail": "Sync failed: {detail}",
         "sd_not_readable": "Could not read SD card {root}.",
+        "tray_open": "Open GoPro Sync",
+        "tray_quit": "Quit",
+        "tray_hidden_msg": "GoPro Sync keeps running next to the clock. To quit: right-click the icon → Quit.",
+        "tray_tooltip_busy": "GoPro Sync — {task} {pct}%",
         "boot_ui": "Preparing the interface…",
         "boot_camera": "Loading the camera…",
         "boot_activity": "Loading fonts…",
@@ -807,6 +815,10 @@ TRANSLATIONS = {
         "ps_start_failed": "No se pudo iniciar PowerShell: {e}",
         "sync_failed_detail": "Falló la sincronización: {detail}",
         "sd_not_readable": "No se pudo leer la tarjeta SD {root}.",
+        "tray_open": "Abrir GoPro Sync",
+        "tray_quit": "Salir",
+        "tray_hidden_msg": "GoPro Sync sigue funcionando junto al reloj. Para salir: clic derecho en el ícono → Salir.",
+        "tray_tooltip_busy": "GoPro Sync — {task} {pct}%",
         "boot_ui": "Preparando la interfaz…",
         "boot_camera": "Cargando la cámara…",
         "boot_activity": "Cargando fuentes…",
@@ -5057,9 +5069,10 @@ class ThumbnailLoaderThread(QThread):
     thumbnail_ready = Signal(str, QImage)
     finished_loading = Signal()
 
-    def __init__(self, files, kind, parent=None):
+    def __init__(self, files, kind, parent=None, meta=None):
         super().__init__(parent)
         self.files = files
+        self.meta = meta or {}     # ruta -> (tamano, fecha) ya conocidos por el listado
         self.kind = kind  # "video" oder "picture"
         self.dpr = screen_dpr()  # se lee en el hilo de la UI
         self._stop_requested = False
@@ -5076,11 +5089,16 @@ class ThumbnailLoaderThread(QThread):
     CACHE_W, CACHE_H = THUMB_W * 2, THUMB_H * 2   # 2x: nitidas hasta 200 % de escala
 
     def _cache_path(self, path):
-        try:
-            st = os.stat(path)
-        except OSError:
-            return None
-        key = f"{os.path.normcase(path)}|{st.st_size}|{int(st.st_mtime)}"
+        known = self.meta.get(path) if hasattr(self, "meta") else None
+        if known is not None:
+            size, mtime = known            # del listado de la carpeta: sin consultar el disco
+        else:
+            try:
+                st = os.stat(path)
+            except OSError:
+                return None
+            size, mtime = st.st_size, st.st_mtime
+        key = f"{os.path.normcase(path)}|{size}|{int(mtime)}"
         return os.path.join(self.CACHE_DIR, hashlib.sha1(key.encode("utf-8")).hexdigest() + ".jpg")
 
     def _load_cached(self, path):
@@ -5146,11 +5164,38 @@ class ThumbnailLoaderThread(QThread):
         # 2) Despues, la version nitida de lo que faltaba (se guarda en cache);
         #    la miniatura se reemplaza en su lugar.
         pending = []
-        for path in self.files:
+        # Lo que ya esta en cache se carga EN PARALELO (4 a la vez; leer y
+        # decodificar JPEG libera el GIL): antes era de a uno.
+        from concurrent.futures import ThreadPoolExecutor
+
+        def load(path):
+            try:
+                img = self._load_cached(path)
+                if img is None:
+                    return path, None
+                cover = make_cover_thumbnail(img, THUMB_W, THUMB_H, dpr=self.dpr)
+                if self.kind == "video":
+                    cover = draw_play_badge(cover)
+                return path, cover
+            except Exception:
+                return path, None
+
+        not_cached = []
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            chunk = 64
+            for i in range(0, len(self.files), chunk):
+                if self._stop_requested:
+                    return
+                for path, cover in pool.map(load, self.files[i:i + chunk]):
+                    if cover is None:
+                        not_cached.append(path)
+                    elif not self._stop_requested:
+                        self.thumbnail_ready.emit(path, cover)
+        for path in not_cached:
             if self._stop_requested:
                 return
             try:
-                img = self._load_cached(path)
+                img = None
                 if img is None and self.kind != "video":
                     # sin _DISK_LOCK: son pocos KB y no debe esperar a que
                     # el hilo de videos termine de leer un video entero
@@ -5607,7 +5652,8 @@ class GalleryBase(QWidget):
             " ClickableThumbnail { border-radius: 12px; outline: none; border: 1px solid rgba(255,255,255,0.08); }"
             " ClickableThumbnail:hover { border: 2px solid rgba(255,255,255,0.85); }")
         self.grid = QGridLayout(self.grid_host)
-        self.grid.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+        self.grid.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter)
+        self.grid.setContentsMargins(0, 0, 0, 0)
         self.grid.setHorizontalSpacing(18)
         # Sin espaciado vertical automatico (Qt solo lo suma en filas con
         # contenido, y la cuadricula crecia al ir llegando miniaturas): el
@@ -5690,9 +5736,9 @@ class GalleryBase(QWidget):
         """Cuantas miniaturas entran a lo ancho (siempre dejando lugar a la
         barra de scroll vertical, asi nunca aparece la horizontal)."""
         spacing = self.grid.horizontalSpacing() if hasattr(self, "grid") else 18
-        margins = self.grid.contentsMargins() if hasattr(self, "grid") else None
-        extra = (margins.left() + margins.right()) if margins is not None else 18
-        avail = self.scroll.viewport().width() - self.scroll.verticalScrollBar().sizeHint().width() - extra - 4
+        # Ancho total del area MENOS la barra vertical (una sola vez: antes se
+        # descontaba dos veces porque viewport() ya la excluye cuando se ve).
+        avail = self.scroll.width() - 2 * self.scroll.frameWidth() - self.scroll.verticalScrollBar().sizeHint().width() - 2
         return max(1, (avail + spacing) // (THUMB_W + spacing))
 
     def resizeEvent(self, event):
@@ -5700,8 +5746,11 @@ class GalleryBase(QWidget):
         self._relayout_timer.start()
 
     def _relayout_if_needed(self):
-        if self._columns_for_width() != self.col_count and self.isVisible():
-            self.refresh()
+        # Al redimensionar solo se REACOMODAN las miniaturas ya cargadas
+        # (antes se recargaban todas las imagenes).
+        if self._columns_for_width() != self.col_count and self.isVisible() and getattr(self, "_files", None):
+            self.col_count = self._columns_for_width()
+            self._layout_grid()
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -5815,6 +5864,7 @@ class GalleryBase(QWidget):
         archivo (antes eran miles de consultas: ~4 s en disco mecanico)."""
         results = []
         self._mtime_cache = {}
+        self._meta = {}            # ruta -> (tamano, fecha) para buscar en la cache sin tocar el disco
         stack = [self.folder]
         try:
             while stack:
@@ -5830,7 +5880,9 @@ class GalleryBase(QWidget):
                                 stack.append(e.path)
                             elif e.name.lower().endswith(exts):
                                 results.append(e.path)
-                                self._mtime_cache[e.path] = e.stat(follow_symlinks=False).st_mtime
+                                st = e.stat(follow_symlinks=False)
+                                self._mtime_cache[e.path] = st.st_mtime
+                                self._meta[e.path] = (st.st_size, st.st_mtime)
                         except OSError:
                             continue
         except Exception:
@@ -5880,42 +5932,15 @@ class GalleryBase(QWidget):
         self._cell_for_path = {}
         self._thumb_widgets = {}
         self._loaded_paths = set()
-        for c in range(self.col_count):
-            self.grid.setColumnMinimumWidth(c, THUMB_W)
-        row = 0
-        col_in_row = 0
-        current_group_date = None
-        for path in files:
-            date_str = self._date_for_path(path)
-            if date_str != current_group_date:
-                if current_group_date is not None:
-                    row += 1
-                current_group_date = date_str
-                header = QLabel(format_gallery_date_header(date_str, self.lang))
-                header.setStyleSheet(
-                    "font-size: 13px; font-weight: 800; letter-spacing: 1px; "
-                    "color: rgba(255,255,255,0.55); background: transparent; "
-                    "padding-top: 6px;"
-                )
-                self.grid.addWidget(header, row, 0, 1, self.col_count)
-                self.grid.setRowMinimumHeight(row, 40)
-                row += 1
-                col_in_row = 0
-            self._cell_for_path[path] = (row, col_in_row)
-            # Reservar el lugar de la miniatura desde ya (alto de fila y ancho
-            # de columna): asi la cuadricula tiene su tamano final antes de que
-            # lleguen las imagenes y no se mueve ni parpadea al ir llenandose.
-            self.grid.setRowMinimumHeight(row, THUMB_H + 18)
-            col_in_row += 1
-            if col_in_row >= self.col_count:
-                col_in_row = 0
-                row += 1
+        self._headers = {}
+        self._files = files
+        self._layout_grid()
 
         if self.loader_thread is not None:
             self.loader_thread.stop()
             self.loader_thread.wait(300)
 
-        self.loader_thread = ThumbnailLoaderThread(files, self.KIND, self)
+        self.loader_thread = ThumbnailLoaderThread(files, self.KIND, self, meta=getattr(self, "_meta", {}))
         self.loader_thread.lang = self.lang
         self._pending_total = len(files)
         self.loader_thread.thumbnail_ready.connect(self._on_thumbnail_ready)
@@ -5935,6 +5960,51 @@ class GalleryBase(QWidget):
         for path, image in batch:
             self._add_thumbnail(path, image)
         self.lbl_loading.setText(f"⏳ {self._loaded_count} / {self._pending_total}")
+
+    def _layout_grid(self):
+        """Ubica encabezados de fecha y miniaturas segun las columnas
+        actuales. Se usa al cargar y al redimensionar (reutiliza los widgets
+        ya creados: no vuelve a leer imagenes)."""
+        self.grid_host.setUpdatesEnabled(False)
+        try:
+            for r in range(self.grid.rowCount()):
+                self.grid.setRowMinimumHeight(r, 0)
+            for c in range(self.grid.columnCount()):
+                self.grid.setColumnMinimumWidth(c, 0)
+            while self.grid.count():
+                self.grid.takeAt(0)          # se quitan del layout, los widgets siguen vivos
+            for c in range(self.col_count):
+                self.grid.setColumnMinimumWidth(c, THUMB_W)
+            row = col = 0
+            current = None
+            for path in self._files:
+                date_str = self._date_for_path(path)
+                if date_str != current:
+                    if current is not None and col != 0:
+                        row += 1
+                    current = date_str
+                    header = self._headers.get(date_str)
+                    if header is None:
+                        header = QLabel(format_gallery_date_header(date_str, self.lang), self.grid_host)
+                        header.setStyleSheet("font-size: 13px; font-weight: 800; letter-spacing: 1px; "
+                                             "color: rgba(255,255,255,0.55); background: transparent; padding-top: 6px;")
+                        self._headers[date_str] = header
+                    self.grid.addWidget(header, row, 0, 1, self.col_count)
+                    self.grid.setRowMinimumHeight(row, 40)
+                    row += 1
+                    col = 0
+                self._cell_for_path[path] = (row, col)
+                # Lugar reservado (alto de fila): la cuadricula no se mueve al llegar imagenes
+                self.grid.setRowMinimumHeight(row, THUMB_H + 18)
+                w = self._thumb_widgets.get(path)
+                if w is not None:
+                    self.grid.addWidget(w, row, col, Qt.AlignmentFlag.AlignTop)
+                col += 1
+                if col >= self.col_count:
+                    col = 0
+                    row += 1
+        finally:
+            self.grid_host.setUpdatesEnabled(True)
 
     def _placeholder_pixmap(self):
         dpr = screen_dpr(self)
@@ -9057,7 +9127,8 @@ class SettingsDialog(QDialog):
 
     def pick_color(self):
         current = QColor(self.config.get("accent_color", "#00f2fe"))
-        new_color = QColorDialog.getColor(current, self, tr(self.lang, "color_dialog_title"))
+        new_color = QColorDialog.getColor(current, self, tr(self.lang, "color_dialog_title"),
+                                          QColorDialog.ColorDialogOption.DontUseNativeDialog)
         if new_color.isValid():
             self.config["accent_color"] = new_color.name()
             self._update_color_button()
@@ -9195,11 +9266,85 @@ class SettingsDialog(QDialog):
         # Hintergrund uebernimmt die neue Sprache aber sofort).
 
 
+APP_POPUP_STYLE = """
+/* ---- Estilo general de la app: se aplica a TODO (tambien a las ventanas que
+   se abren aparte), asi nada queda con el aspecto por defecto de Windows ---- */
+QDialog { background-color: #1c1e29; }
+QDialog QLabel { color: #ffffff; }
+QMenu {
+    background-color: #1f2230; color: #ffffff; border: 1px solid rgba(255,255,255,0.14);
+    border-radius: 10px; padding: 6px; font-size: 13px;
+}
+QMenu::item { padding: 7px 22px 7px 14px; border-radius: 7px; background: transparent; color: #ffffff; }
+QMenu::item:selected { background-color: ACCENT_SOFT; color: #ffffff; }
+QMenu::item:disabled { color: rgba(255,255,255,0.45); }
+QMenu::separator { height: 1px; background: rgba(255,255,255,0.12); margin: 5px 8px; }
+QToolTip {
+    background-color: #1f2230; color: #ffffff; border: 1px solid rgba(255,255,255,0.18);
+    border-radius: 6px; padding: 5px 8px; font-size: 12px;
+}
+QScrollBar:vertical { background: transparent; width: 10px; margin: 4px 2px 4px 0px; }
+QScrollBar:horizontal { background: transparent; height: 10px; margin: 0px 4px 2px 4px; }
+QScrollBar::handle:vertical { background: rgba(255,255,255,0.18); min-height: 30px; border-radius: 5px; }
+QScrollBar::handle:horizontal { background: rgba(255,255,255,0.18); min-width: 30px; border-radius: 5px; }
+QScrollBar::handle:hover { background: rgba(255,255,255,0.32); }
+QScrollBar::add-line, QScrollBar::sub-line { width: 0px; height: 0px; }
+QScrollBar::add-page, QScrollBar::sub-page { background: none; }
+QSlider::groove:horizontal { height: 6px; background: rgba(255,255,255,0.12); border-radius: 3px; }
+QSlider::sub-page:horizontal { background: ACCENT; border-radius: 3px; }
+QSlider::handle:horizontal { background: #ffffff; width: 16px; height: 16px; margin: -5px 0; border-radius: 8px; }
+QSlider::handle:horizontal:hover { background: ACCENT; }
+QLineEdit, QDateEdit {
+    background: rgba(255,255,255,0.06); color: #ffffff; border: 1px solid rgba(255,255,255,0.15);
+    border-radius: 8px; padding: 6px 10px; selection-background-color: ACCENT_SOFT;
+}
+QLineEdit:focus, QDateEdit:focus { border: 1px solid ACCENT; }
+QDateEdit::drop-down { border: none; width: 22px; }
+QCalendarWidget QWidget { background-color: #1f2230; color: #ffffff; alternate-background-color: #1f2230; }
+QCalendarWidget QWidget#qt_calendar_navigationbar { background-color: #262a3a; }
+QCalendarWidget QToolButton {
+    color: #ffffff; background: transparent; border: none; border-radius: 6px; padding: 4px 8px; font-weight: 700;
+}
+QCalendarWidget QToolButton:hover { background: rgba(255,255,255,0.10); }
+QCalendarWidget QAbstractItemView {
+    background-color: #1f2230; color: #ffffff; selection-background-color: ACCENT; selection-color: #0d0d12;
+    outline: none;
+}
+QCalendarWidget QAbstractItemView:disabled { color: rgba(255,255,255,0.3); }
+QCalendarWidget QSpinBox { background: #262a3a; color: #ffffff; border: none; }
+QColorDialog { background-color: #1c1e29; }
+QColorDialog QLabel, QColorDialog QSpinBox, QColorDialog QLineEdit { color: #ffffff; }
+QColorDialog QSpinBox { background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.15); border-radius: 6px; }
+QDialog QPushButton:!flat {
+    background: rgba(255,255,255,0.08); color: #ffffff; border: 1px solid rgba(255,255,255,0.14);
+    border-radius: 10px; padding: 7px 16px; font-weight: 600;
+}
+QDialog QPushButton:hover { background: rgba(255,255,255,0.16); }
+"""
+
+
+def apply_popup_style(accent="#00f2fe"):
+    """Menus contextuales y tooltips con los colores de la app en TODA la
+    aplicacion (antes usaban los de Windows: texto/fondo que no combinaban)."""
+    app = QApplication.instance()
+    if app is None:
+        return
+    c = QColor(accent)
+    css = (APP_POPUP_STYLE.replace("ACCENT_SOFT", f"rgba({c.red()},{c.green()},{c.blue()},0.25)")
+           .replace("ACCENT", c.name()))
+    base = getattr(app, "_base_style", None)
+    if base is None:
+        base = app.styleSheet() or ""
+        app._base_style = base
+    app.setStyleSheet(base + css)
+
+
 class MainWindow(QWidget):
     def __init__(self):
         super().__init__()
         boot_step(10, "boot_ui")
         self.config = load_config()
+        apply_popup_style(self.config.get("accent_color", "#00f2fe"))
         set_thumb_cache_dir(self.config.get("thumb_cache_dir", ""))
         self.lang = self.config.get("language", "de")
         self.setWindowTitle("GoPro Sync Pro")
@@ -9746,11 +9891,35 @@ class MainWindow(QWidget):
         self.switch_page(self.ACTIVITY_INDEX, self.btn_nav_activity)
 
     def closeEvent(self, event):
+        # Con inicio automatico (icono en la bandeja), cerrar la ventana la
+        # oculta y la app sigue vigilando la camara junto al reloj.
+        tray = getattr(self, "tray", None)
+        if tray is not None and not getattr(self, "_really_quit", False) and self.config.get("autostart_enabled", False):
+            event.ignore()
+            self.hide()
+            if not getattr(self, "_tray_hint_shown", False):
+                self._tray_hint_shown = True
+                tray.showMessage("GoPro Sync", tr(self.lang, "tray_hidden_msg"),
+                                 QSystemTrayIcon.MessageIcon.Information, 5000)
+            return
         monitor = getattr(self.sync_page, "monitor_thread", None)
         if monitor is not None:
             monitor.stop()
             monitor.wait(3000)
         super().closeEvent(event)
+
+    def quit_app(self):
+        """Salir de verdad (menu de la bandeja)."""
+        self._really_quit = True
+        worker = getattr(self.sync_page, "sync_worker", None)
+        if worker is not None and worker.isRunning():
+            worker.cancel()
+            worker.wait(5000)
+        tray = getattr(self, "tray", None)
+        if tray is not None:
+            tray.hide()
+        self.close()
+        QApplication.instance().quit()
 
 
 # --- [ ANIMATED SPLASH SCREEN ] ---
@@ -9870,6 +10039,38 @@ def bring_to_front(window):
         pass
 
 
+def setup_tray(app, window, lang):
+    """Icono junto al reloj: clic = abrir; menu: Abrir / Salir. Muestra el
+    progreso de la copia en curso al pasar el mouse."""
+    if not QSystemTrayIcon.isSystemTrayAvailable():
+        return None
+    tray = QSystemTrayIcon(load_app_icon(), app)
+    tray.setToolTip("GoPro Sync")
+    menu = QMenu()
+    menu.addAction(tr(lang, "tray_open"), lambda: bring_to_front(window))
+    menu.addSeparator()
+    menu.addAction(tr(lang, "tray_quit"), window.quit_app)
+    tray.setContextMenu(menu)
+    tray._menu = menu   # mantener referencia
+
+    def activated(reason):
+        if reason in (QSystemTrayIcon.ActivationReason.Trigger, QSystemTrayIcon.ActivationReason.DoubleClick):
+            bring_to_front(window)
+    tray.activated.connect(activated)
+
+    def progress(pct):
+        if pct is None:
+            tray.setToolTip("GoPro Sync")
+        else:
+            task = tr(lang, "busy_syncing" if window.sync_page._camera_task_running else "busy_importing")
+            tray.setToolTip(tr(lang, "tray_tooltip_busy", task=task, pct=int(pct)))
+    window.sync_page.activity_progress.connect(progress)
+    tray.show()
+    window.tray = tray
+    app.setQuitOnLastWindowClosed(False)   # cerrar la ventana no cierra la app si hay bandeja
+    return tray
+
+
 def main():
     minimize_own_console()
     app = QApplication(sys.argv)
@@ -9897,11 +10098,16 @@ def main():
     silent_start = "--silent" in sys.argv
     open_on_connect = silent_start and config.get("open_on_gopro_connect", False) and config.get("autostart_enabled", False)
 
-    if open_on_connect:
+    if silent_start:
+        # Inicio con Windows: SIN pantalla de carga ni ventana. Queda el icono
+        # junto al reloj vigilando la camara; la ventana se abre con un clic
+        # en el icono (o sola al conectar la GoPro si esta activado).
         window = MainWindow()
-        window.sync_page.monitor_thread.connection_changed.connect(window.show_from_background_on_connect)
-        window.sync_page.start_monitoring()
-        # Fenster bewusst NICHT anzeigen - taucht erst in show_from_background_on_connect() auf.
+        setup_tray(app, window, config.get("language", "es"))
+        if open_on_connect:
+            window.sync_page.monitor_thread.connection_changed.connect(window.show_from_background_on_connect)
+        if window.config.get("onboarding_done", False):
+            window.sync_page.start_monitoring()
     else:
         # WICHTIG: Splash zuerst zeigen, DANACH erst MainWindow() bauen.
         # Vorher war es umgekehrt - MainWindow() baut die komplette Sync-
@@ -9929,6 +10135,9 @@ def main():
         BOOT_PROGRESS = None
         splash.set_status(100, tr(boot_lang, "boot_done"))
         build_ms = (time.monotonic() - start_time) * 1000
+
+        if config.get("autostart_enabled", False):
+            setup_tray(app, window, boot_lang)
 
         def _reveal_main_window():
             # Primero la ventana al frente y DESPUES cerrar la pantalla de
