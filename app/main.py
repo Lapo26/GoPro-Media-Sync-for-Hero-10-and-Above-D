@@ -12,9 +12,7 @@ import time
 import json
 import subprocess
 import math
-import urllib.request
-import urllib.error
-import asyncio
+# urllib y asyncio se importan donde se usan (BLE / API HTTP): ~0,3 s menos al arrancar
 import ctypes
 import traceback
 import struct
@@ -117,7 +115,9 @@ APP_VERSION = "1.2.0"
 
 CONFIG_DIR = os.path.join(os.getenv("APPDATA") or os.path.expanduser("~"), "GoProSyncPro")
 CONFIG_FILE = os.path.join(CONFIG_DIR, "sync_config.json")
-FONT_STACK = "'Poppins', 'Montserrat', 'Century Gothic', 'Segoe UI Semibold', 'Segoe UI', sans-serif"
+# UNA sola familia: con varias (o con emojis en los textos) Qt revisa las ~500
+# familias de Windows buscando reemplazos y el arranque tardaba 1,5-1,9 s mas.
+FONT_STACK = "'Century Gothic'"
 
 # --- [ UNTERSTUETZTE GOPRO-MODELLE ] ---
 #
@@ -1035,15 +1035,66 @@ TRANSLATIONS = {
 }
 
 
+_EMOJI_RE = re.compile("[\U0001F000-\U0001FFFF\u2190-\u21FF\u2300-\u23FF\u2600-\u27BF\u2B00-\u2BFF\uFE0F]")
+
+
+def strip_emoji(text):
+    """Quita emojis/simbolos que Century Gothic no tiene: dibujarlos obligaba a
+    Qt a buscar en todas las fuentes de Windows (lento al arrancar)."""
+    if not text:
+        return text
+    out = _EMOJI_RE.sub("", text)
+    return "\n".join(line.strip() for line in out.split("\n")).strip("\n ") if out != text else text
+
+
 def tr(lang, key, **kwargs):
     table = TRANSLATIONS.get(lang, TRANSLATIONS["de"])
-    text = table.get(key, TRANSLATIONS["de"].get(key, key))
+    text = strip_emoji(table.get(key, TRANSLATIONS["de"].get(key, key)))
     if kwargs:
         try:
             return text.format(**kwargs)
         except Exception:
             return text
     return text
+
+
+_EMOJI_ICON_CACHE = {}
+
+
+def emoji_icon(ch, px=18):
+    """Emoji dibujado como icono con UNA sola fuente (Segoe UI Emoji): unos ms,
+    sin la busqueda de fuentes de reserva."""
+    try:
+        dpr = max(1.0, QGuiApplication.primaryScreen().devicePixelRatio())
+    except Exception:
+        dpr = 1.0
+    key = (ch, px, dpr)
+    if key not in _EMOJI_ICON_CACHE:
+        pm = QPixmap(int(px * dpr), int(px * dpr))
+        pm.setDevicePixelRatio(dpr)
+        pm.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(pm)
+        f = QFont("Segoe UI Emoji")
+        f.setPixelSize(int(px * 0.85))
+        painter.setFont(f)
+        painter.drawText(QRectF(0, 0, px, px), Qt.AlignmentFlag.AlignCenter, ch)
+        painter.end()
+        _EMOJI_ICON_CACHE[key] = QIcon(pm)
+    return _EMOJI_ICON_CACHE[key]
+
+
+NAV_ICONS = {"nav_sync": "\U0001F4F7", "nav_videos": "\U0001F3AC", "nav_pictures": "\U0001F4F8",
+             "nav_activity": "\U0001F4CB", "nav_import": "\U0001F4C2", "nav_backup": "\U0001F4BE",
+             "nav_settings": "\u2699"}
+
+
+def set_nav_text(button, lang, key):
+    """Texto del menu lateral + su emoji como icono."""
+    button.setText(tr(lang, key))
+    ch = NAV_ICONS.get(key)
+    if ch:
+        button.setIcon(emoji_icon(ch, 18))
+        button.setIconSize(QSize(18, 18))
 
 
 def _read_config_file(path):
@@ -1105,7 +1156,18 @@ def asset_path(filename):
     return os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", filename)
 
 
+_APP_ICON = None
+
+
 def load_app_icon():
+    global _APP_ICON
+    if _APP_ICON is not None:
+        return _APP_ICON
+    _APP_ICON = _load_app_icon_uncached()
+    return _APP_ICON
+
+
+def _load_app_icon_uncached():
     """Laedt das App-Icon aus dem assets-Ordner. Bevorzugt wird
     'app_icon.ico' (Windows nutzt ohnehin intern .ico-Dateien fuer
     Titelleiste/Taskleiste und diese enthalten meist mehrere Groessen fuer
@@ -1240,7 +1302,9 @@ class SoundManager:
         zu oeffnen, bevor der erste echte Sound gebraucht wird."""
         cls._ensure_pool("button")
         cls._ensure_tap_pool()
-        if cls._long_audio is None:
+        # Solo preparar el reproductor si hay sonidos largos (hoy no hay .wav en
+        # assets: crearlo igual costaba ~0,3 s al arrancar).
+        if cls._long_audio is None and any(_find_sound_asset(n) for n in ("boot", "finish", "settings")):
             cls._long_player = QMediaPlayer()
             cls._long_audio = QAudioOutput()
             cls._long_audio.setVolume(cls._volume)
@@ -2113,6 +2177,7 @@ _LAST_API_ATTEMPT = 0.0
 
 
 def attempt_api_battery_and_force_mtp():
+    import urllib.request
     """Solo para HERO9 y posteriores conectadas en modo "GoPro Connect": las
     pasa a MTP via Open GoPro. Antes se intentaba en CADA vuelta del bucle
     contra una IP fija (172.29.171.51, la de una camara concreta), lo que con
@@ -2243,6 +2308,7 @@ def read_battery_via_wpd(name_match):
 
 
 def read_battery_via_ble(model=None):
+    import asyncio
     """Liest den Akkustand per Bluetooth LE (siehe Erklärung oben). Läuft
     synchron in einem eigenen kleinen Event-Loop - wird ausschließlich im
     DeviceMonitorThread (Hintergrund-Thread) aufgerufen, blockiert also nie
@@ -2279,6 +2345,7 @@ def _get_usb_subnet_candidates():
     return candidates
 
 def read_battery_via_open_gopro(timeout=1.2):
+    import urllib.request
     for local_ip in _get_usb_subnet_candidates():
         parts = local_ip.split(".")
         if len(parts) != 4:
@@ -4679,7 +4746,7 @@ class SyncProgressButton(QWidget):
         self._clickable = False
         self._is_syncing = False
         self._idle_text = "Sync starten"
-        self._menu_labels = {"all": "🔄  Alles synchronisieren", "pictures": "🖼️  Nur Bilder synchronisieren", "videos": "🎬  Nur Videos synchronisieren"}
+        self._menu_labels = {"all": "", "pictures": "", "videos": ""}   # los pone set_labels() con tr()
         self._accent_color = QColor("#00f2fe")
 
         self._display_progress = 0.0
@@ -5119,7 +5186,7 @@ class ThumbnailLoaderThread(QThread):
         f.setPixelSize(int(self.CACHE_H * 0.12))
         f.setBold(True)
         p.setFont(f)
-        p.drawText(img.rect(), Qt.AlignmentFlag.AlignCenter, "⚠\n" + tr(getattr(self, "lang", "es"), "video_damaged"))
+        p.drawText(img.rect(), Qt.AlignmentFlag.AlignCenter, tr(getattr(self, "lang", "es"), "video_damaged"))
         p.end()
         return img
 
@@ -5671,7 +5738,7 @@ class GalleryBase(QWidget):
 
     def _update_sort_button_text(self):
         label = tr(self.lang, "gallery_sort_newest" if self.sort_newest_first else "gallery_sort_oldest")
-        self.btn_sort.setText(f"⇅ {label}")
+        self.btn_sort.setText(label)
 
     def _show_sort_menu(self):
         menu = QMenu(self)
@@ -5704,11 +5771,12 @@ class GalleryBase(QWidget):
             return
         self.sort_newest_first = new_value
         self._update_sort_button_text()
+        self._rescan_next = False
         self.refresh()
 
     def retranslate(self, title, empty_text):
         self.title_lbl.setText(title)
-        self.empty_lbl.setText(f"{self._empty_icon}\n{empty_text}")
+        self.empty_lbl.setText((f"{self._empty_icon}\n{empty_text}" if self._empty_icon else empty_text))
         self._update_sort_button_text()
 
     def show_empty(self):
@@ -5782,6 +5850,7 @@ class GalleryBase(QWidget):
         self.date_filter = rng
         self._date_filter_key = key
         self._update_date_button_text(label)
+        self._rescan_next = False
         self.refresh()
 
     def _show_date_menu(self):
@@ -5857,11 +5926,14 @@ class GalleryBase(QWidget):
         except Exception:
             return "0000-00-00"
 
-    def get_files(self, exts):
+    def get_files(self, exts, rescan=True):
         """Recorre el destino recursivamente y devuelve las rutas ordenadas
         por fecha. Usa os.scandir: en Windows la fecha de cada archivo viene
         con el listado de la carpeta, sin consultar el disco archivo por
         archivo (antes eran miles de consultas: ~4 s en disco mecanico)."""
+        if not rescan and getattr(self, "_all_files", None) is not None:
+            results = list(self._all_files)          # orden/filtro: sin volver a recorrer el disco
+            return self._filter_and_sort(results)
         results = []
         self._mtime_cache = {}
         self._meta = {}            # ruta -> (tamano, fecha) para buscar en la cache sin tocar el disco
@@ -5887,6 +5959,10 @@ class GalleryBase(QWidget):
                             continue
         except Exception:
             return []
+        self._all_files = list(results)
+        return self._filter_and_sort(results)
+
+    def _filter_and_sort(self, results):
         if self.date_filter:
             lo, hi = self.date_filter
             results = [p for p in results if lo <= self._date_for_path(p) <= hi]
@@ -5906,19 +5982,20 @@ class GalleryBase(QWidget):
         """Startet das Laden der Vorschaubilder IM HINTERGRUND (siehe
         ThumbnailLoaderThread) - blockiert die Oberflaeche nicht mehr, auch
         nicht bei sehr vielen Dateien."""
-        files = self.get_files(self.EXTENSIONS)
+        files = self.get_files(self.EXTENSIONS, rescan=getattr(self, "_rescan_next", True))
+        self._rescan_next = True
         self.empty_lbl.hide()
 
         if not files:
             self.show_empty()
             if self.date_filter:
-                self.empty_lbl.setText(f"📅\n{tr(self.lang, 'date_no_results')}")
+                self.empty_lbl.setText(tr(self.lang, 'date_no_results'))
             return
 
         self.scroll.show()
         self.col_count = self._columns_for_width()
         self._loaded_count = 0
-        self.lbl_loading.setText(f"⏳ 0 / {len(files)}")
+        self.lbl_loading.setText(f"0 / {len(files)}")
         self.lbl_loading.show()
 
         # --- Datums-Trennzeilen + Grid-Positionen VORAB berechnen ---------
@@ -5959,7 +6036,7 @@ class GalleryBase(QWidget):
         batch, self._pending_thumbs = self._pending_thumbs, []
         for path, image in batch:
             self._add_thumbnail(path, image)
-        self.lbl_loading.setText(f"⏳ {self._loaded_count} / {self._pending_total}")
+        self.lbl_loading.setText(f"{self._loaded_count} / {self._pending_total}")
 
     def _layout_grid(self):
         """Ubica encabezados de fecha y miniaturas segun las columnas
@@ -6082,7 +6159,7 @@ class VideoGallery(GalleryBase):
     EXTENSIONS = (".mp4",)
 
     def __init__(self, folder, lang="de"):
-        super().__init__(folder, tr(lang, "video_gallery_title"), "🎬", tr(lang, "no_videos_yet"), lang)
+        super().__init__(folder, tr(lang, "video_gallery_title"), "", tr(lang, "no_videos_yet"), lang)
         self._needs_refresh = True   # se carga al abrirla
 
     def play_video(self, path):
@@ -6095,7 +6172,7 @@ class PictureGallery(GalleryBase):
     EXTENSIONS = (".jpg", ".png", ".jpeg")
 
     def __init__(self, folder, lang="de"):
-        super().__init__(folder, tr(lang, "picture_gallery_title"), "📸", tr(lang, "no_pictures_yet"), lang)
+        super().__init__(folder, tr(lang, "picture_gallery_title"), "", tr(lang, "no_pictures_yet"), lang)
         self._needs_refresh = True   # se carga al abrirla
 
     def open_image(self, path):
@@ -6399,9 +6476,8 @@ class SyncTabWidget(QWidget):
 
         boot_step(45, "boot_camera")
         self.connect_player = QMediaPlayer(self)
-        self.audio_output = QAudioOutput(self)
-        self.audio_output.setVolume(0.0) 
-        self.connect_player.setAudioOutput(self.audio_output)
+        # Sin salida de audio: el video de conexion se reproduce mudo y crear un
+        # QAudioOutput costaba ~0,25 s al arrancar.
         # IMPORTANT: setVideoOutput to the QGraphicsVideoItem
         self.connect_player.setVideoOutput(self.rounded_video.video_item)
         # Zweiter Ausgang (QVideoSink) fuer die 360-Grad-Vorschau - wird nur
@@ -7753,7 +7829,7 @@ class SyncProgressPanel(QFrame):
         self.lbl_queue.setStyleSheet("font-size: 12px; color: rgba(255,255,255,0.6);")
         self.btn_cancel = QPushButton(tr(lang, "cancel_btn"))
         self.btn_cancel.clicked.connect(self._cancel)
-        self.btn_close = QPushButton("✕")
+        self.btn_close = QPushButton("×")
         self.btn_close.setFixedWidth(36)
         self.btn_close.clicked.connect(self.hide)
         row3.addWidget(self.lbl_result, 1)
@@ -7827,7 +7903,7 @@ class SyncProgressPanel(QFrame):
 
     def on_progress(self, idx, total, name, pct):
         if name.startswith("__CLEANUP__"):
-            self.lbl_file.setText("🧹 " + name[len("__CLEANUP__"):])
+            self.lbl_file.setText(name[len("__CLEANUP__"):])
             self.bar_file.setValue(0)
             self.btn_cancel.setEnabled(False)   # el borrado final no se interrumpe a medias
             return
@@ -8074,7 +8150,7 @@ def describe_media(path, lang):
             pass
     elif low.endswith(".mp4"):
         if is_broken_mp4(path):
-            media.append((tr(lang, "info_damaged"), "⚠ " + tr(lang, "video_damaged")))
+            media.append((tr(lang, "info_damaged"), tr(lang, "video_damaged")))
         else:
             mi = read_mp4_info(path)
             if mi.get("firmware"):
@@ -8378,7 +8454,7 @@ class LanguageDialog(QDialog):
         lay = QVBoxLayout(self)
         lay.setContentsMargins(28, 24, 28, 24)
         lay.setSpacing(12)
-        title = QLabel("🌐  Idioma · Language · Sprache")
+        title = QLabel("Idioma · Language · Sprache")
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
         title.setStyleSheet("font-size: 18px; font-weight: 800;")
         lay.addWidget(title)
@@ -8595,7 +8671,7 @@ class OnboardingWizard(QWidget):
 
         path_row = QHBoxLayout()
         path_row.setSpacing(10)
-        self.lbl_onboard_path = QLabel(f"📁  {self.chosen_target_dir}")
+        self.lbl_onboard_path = QLabel(self.chosen_target_dir)
         self.lbl_onboard_path.setWordWrap(True)
         self.lbl_onboard_path.setStyleSheet("""
             color: rgba(255,255,255,0.75); font-size: 12px; background: rgba(255,255,255,0.05);
@@ -8647,7 +8723,7 @@ class OnboardingWizard(QWidget):
         )
         if new_dir:
             self.chosen_target_dir = os.path.normpath(new_dir)
-            self.lbl_onboard_path.setText(f"📁  {self.chosen_target_dir}")
+            self.lbl_onboard_path.setText(self.chosen_target_dir)
 
     def _on_autostart_toggle(self, state):
         # "Abrir al conectar" necesita que la app arranque con Windows:
@@ -8911,7 +8987,7 @@ class SettingsDialog(QDialog):
 
         folder_row = QHBoxLayout()
         folder_row.setSpacing(12)
-        self.lbl_folder = QLabel(f"📁  {self.config.get('target_dir', '')}")
+        self.lbl_folder = QLabel(self.config.get('target_dir', ''))
         self.lbl_folder.setStyleSheet("""
             QLabel {
                 color: rgba(255,255,255,0.65); font-size: 12px;
@@ -8954,7 +9030,7 @@ class SettingsDialog(QDialog):
         folder_layout.addWidget(cache_title)
         cache_row = QHBoxLayout()
         cache_row.setSpacing(12)
-        self.lbl_cache = QLabel(f"🗂  {ThumbnailLoaderThread.CACHE_DIR}")
+        self.lbl_cache = QLabel(ThumbnailLoaderThread.CACHE_DIR)
         self.lbl_cache.setWordWrap(True)
         self.lbl_cache.setStyleSheet(self.lbl_folder.styleSheet())
         self.btn_cache = QPushButton(tr(self.lang, "thumb_cache_btn"))
@@ -8988,7 +9064,7 @@ class SettingsDialog(QDialog):
             QListWidget::item:selected { background-color: rgba(255,255,255,0.12); }
         """)
         for d in self.config.get("backup_dirs", []) or []:
-            self.list_backup.addItem(f"💾  {d}")
+            self.list_backup.addItem(d)
         folder_layout.addWidget(self.list_backup)
 
         backup_btn_row = QHBoxLayout()
@@ -9160,7 +9236,7 @@ class SettingsDialog(QDialog):
         )
         if new_dir:
             new_dir = os.path.normpath(new_dir)
-            self.lbl_folder.setText(f"📁  {new_dir}")
+            self.lbl_folder.setText(new_dir)
             self.on_folder_change(new_dir)
 
     def on_autostart_toggle(self, state):
@@ -9194,7 +9270,7 @@ class SettingsDialog(QDialog):
         self.config["thumb_cache_dir"] = new_dir
         save_config(self.config)
         set_thumb_cache_dir(new_dir)
-        self.lbl_cache.setText(f"🗂  {new_dir}")
+        self.lbl_cache.setText(new_dir)
         show_toast(self, tr(self.lang, "thumb_cache_moved", n=moved))
 
     def add_backup_dir(self):
@@ -9213,7 +9289,7 @@ class SettingsDialog(QDialog):
         dirs.append(new_dir)
         self.config["backup_dirs"] = dirs
         save_config(self.config)
-        self.list_backup.addItem(f"💾  {new_dir}")
+        self.list_backup.addItem(new_dir)
 
     def remove_backup_dir(self):
         row = self.list_backup.currentRow()
@@ -9231,7 +9307,7 @@ class SettingsDialog(QDialog):
             # puede haber agregado un destino nuevo: refrescar la lista
             self.list_backup.clear()
             for d in self.config.get("backup_dirs", []) or []:
-                self.list_backup.addItem(f"💾  {d}")
+                self.list_backup.addItem(d)
 
     def on_backup_after_toggle(self, state):
         self.config["backup_after_sync"] = bool(state)
@@ -9479,20 +9555,24 @@ class MainWindow(QWidget):
             }
         """
 
-        self.btn_nav_sync = QPushButton(tr(self.lang, "nav_sync"))
+        self.btn_nav_sync = QPushButton("")
+        set_nav_text(self.btn_nav_sync, self.lang, "nav_sync")
         self.btn_nav_sync.setCheckable(True)
         self.btn_nav_sync.setChecked(True)
         
-        self.btn_nav_videos = QPushButton(tr(self.lang, "nav_videos"))
+        self.btn_nav_videos = QPushButton("")
+        set_nav_text(self.btn_nav_videos, self.lang, "nav_videos")
         self.btn_nav_videos.setCheckable(True)
         
-        self.btn_nav_pictures = QPushButton(tr(self.lang, "nav_pictures"))
+        self.btn_nav_pictures = QPushButton("")
+        set_nav_text(self.btn_nav_pictures, self.lang, "nav_pictures")
         self.btn_nav_pictures.setCheckable(True)
 
         sidebar_layout.addWidget(self.btn_nav_sync)
         sidebar_layout.addWidget(self.btn_nav_videos)
         sidebar_layout.addWidget(self.btn_nav_pictures)
-        self.btn_nav_activity = ActivityNavButton(tr(self.lang, "nav_activity"))
+        self.btn_nav_activity = ActivityNavButton("")
+        set_nav_text(self.btn_nav_activity, self.lang, "nav_activity")
         self.btn_nav_activity.setCheckable(True)
         sidebar_layout.addWidget(self.btn_nav_activity)
         sidebar_layout.addStretch()
@@ -9503,17 +9583,20 @@ class MainWindow(QWidget):
             "text-align: left; padding: 9px 14px; color: rgba(255,255,255,0.75); border-radius: 10px; border: none; } "
             "QPushButton:hover { color: #fff; background-color: rgba(255,255,255,0.08); }"
         )
-        self.btn_import = QPushButton(tr(self.lang, "nav_import"))
+        self.btn_import = QPushButton("")
+        set_nav_text(self.btn_import, self.lang, "nav_import")
         self.btn_import.setStyleSheet(action_style)
         self.btn_import.clicked.connect(self.import_from_folder)
-        self.btn_backup = QPushButton(tr(self.lang, "nav_backup"))
+        self.btn_backup = QPushButton("")
+        set_nav_text(self.btn_backup, self.lang, "nav_backup")
         self.btn_backup.setStyleSheet(action_style)
         self.btn_backup.clicked.connect(self.backup_from_menu)
         sidebar_layout.addWidget(self.btn_import)
         sidebar_layout.addWidget(self.btn_backup)
         sidebar_layout.addSpacing(6)
 
-        self.btn_settings = QPushButton(tr(self.lang, "nav_settings"))
+        self.btn_settings = QPushButton("")
+        set_nav_text(self.btn_settings, self.lang, "nav_settings")
         self.btn_settings.setStyleSheet(
             "QPushButton { background-color: rgba(255,255,255,0.05); font-size: 13px; font-weight: 600; "
             "text-align: left; padding: 10px 14px; color: rgba(255,255,255,0.6); border-radius: 10px; "
@@ -9781,13 +9864,13 @@ class MainWindow(QWidget):
     def retranslate_ui(self):
         """Aktualisiert alle sichtbaren Texte in-place auf die aktuell
         gewaehlte Sprache - kein Neustart der App noetig."""
-        self.btn_nav_sync.setText(tr(self.lang, "nav_sync"))
-        self.btn_nav_videos.setText(tr(self.lang, "nav_videos"))
-        self.btn_nav_pictures.setText(tr(self.lang, "nav_pictures"))
-        self.btn_import.setText(tr(self.lang, "nav_import"))
-        self.btn_nav_activity.setText(tr(self.lang, "nav_activity"))
-        self.btn_backup.setText(tr(self.lang, "nav_backup"))
-        self.btn_settings.setText(tr(self.lang, "nav_settings"))
+        set_nav_text(self.btn_nav_sync, self.lang, "nav_sync")
+        set_nav_text(self.btn_nav_videos, self.lang, "nav_videos")
+        set_nav_text(self.btn_nav_pictures, self.lang, "nav_pictures")
+        set_nav_text(self.btn_import, self.lang, "nav_import")
+        set_nav_text(self.btn_nav_activity, self.lang, "nav_activity")
+        set_nav_text(self.btn_backup, self.lang, "nav_backup")
+        set_nav_text(self.btn_settings, self.lang, "nav_settings")
 
         sp = self.sync_page
         sp.placeholder.setText(tr(self.lang, "waiting_connection"))
@@ -9934,9 +10017,7 @@ class AnimatedSplash(QWidget):
         self.progress = 0.0
         self.status = ""
         self.angle = 0
-        self.timer = QTimer(self)
-        self.timer.timeout.connect(self._update_spin)
-        self.timer.start(16) 
+        self.timer = QTimer(self)   # (sin spinner: el timer ya no se usa para animar)
 
     def set_status(self, pct, text):
         self.progress = max(self.progress, float(pct))
@@ -10165,7 +10246,7 @@ def main():
         # gedauert hat. War die Bauzeit laenger als 1.4s, wird trotzdem
         # noch kurz (200ms) nachgewartet, damit der Uebergang nicht
         # abrupt wirkt.
-        remaining_ms = max(200, 1400 - int(build_ms))
+        remaining_ms = max(0, 500 - int(build_ms))   # antes: minimo fijo de 1,4 s
         QTimer.singleShot(remaining_ms, _reveal_main_window)
 
     sys.exit(app.exec())
