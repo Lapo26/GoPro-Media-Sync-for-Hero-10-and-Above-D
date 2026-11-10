@@ -318,6 +318,13 @@ TRANSLATIONS = {
         "cam_preview_loading": "Vorschau wird von der Kamera geholt…",
         "cam_preview_failed": "Die Vorschau konnte nicht von der Kamera geholt werden.",
         "cam_view_btn": "Dateien der Kamera ansehen",
+        "sync_already_suffix": " {n} waren schon da.",
+        "import_pick_summary": "{total} Dateien · {new} neu",
+        "import_pick_btn": "Dateien auswählen…",
+        "import_pick_title": "Auswählen, was importiert wird",
+        "import_picked": "{n} zum Import ausgewählt ({size})",
+        "import_pick_use": "Auswahl übernehmen",
+        "import_pick_hint": "Auf eine Miniatur klicken, um sie aus- oder abzuwählen.",
         "err_stalled": "Konnte nicht gelesen werden: keine Antwort bei dieser Datei (evtl. beschädigt). Übersprungen.",
         "err_empty_file": "Leere Datei (0 Byte), vermutlich eine abgebrochene Aufnahme: übersprungen.",
         "err_card_unresponsive": "Die Karte reagiert nicht mehr. Bitte prüfen (oder anderen Leser probieren) und erneut importieren: Bereits Kopiertes bleibt erhalten.",
@@ -615,6 +622,13 @@ TRANSLATIONS = {
         "cam_preview_loading": "Getting the preview from the camera…",
         "cam_preview_failed": "Could not get the preview from the camera.",
         "cam_view_btn": "View camera files",
+        "sync_already_suffix": " {n} were already there.",
+        "import_pick_summary": "{total} files · {new} new",
+        "import_pick_btn": "Choose files…",
+        "import_pick_title": "Choose what to import",
+        "import_picked": "{n} chosen to import ({size})",
+        "import_pick_use": "Use selection",
+        "import_pick_hint": "Click a thumbnail to select or deselect it.",
         "err_stalled": "Could not read: no response for this file (it may be damaged). Skipped.",
         "err_empty_file": "Empty file (0 bytes), probably an interrupted recording: skipped.",
         "err_card_unresponsive": "The card stopped responding. Check it (or try another reader) and import again: everything already copied is kept.",
@@ -912,6 +926,13 @@ TRANSLATIONS = {
         "cam_preview_loading": "Trayendo la vista previa desde la cámara…",
         "cam_preview_failed": "No se pudo traer la vista previa de la cámara.",
         "cam_view_btn": "Ver archivos de la cámara",
+        "sync_already_suffix": " {n} ya estaban.",
+        "import_pick_summary": "{total} archivos · {new} nuevos",
+        "import_pick_btn": "Elegir archivos…",
+        "import_pick_title": "Elegir qué importar",
+        "import_picked": "{n} elegidos para importar ({size})",
+        "import_pick_use": "Usar selección",
+        "import_pick_hint": "Tocá una miniatura para elegirla o quitarla.",
         "err_stalled": "No se pudo leer: no responde con este archivo (puede estar dañado). Se saltó.",
         "err_empty_file": "Archivo vacío (0 bytes), probablemente una grabación cortada: se omitió.",
         "err_card_unresponsive": "La tarjeta dejó de responder. Revisala (o probá con otro lector) y volvé a importar: lo ya copiado queda guardado.",
@@ -3708,7 +3729,7 @@ class SyncWorkerThread(QThread):
     plan = Signal(object)        # lista con el tamano de cada archivo (para el progreso total)
 
     def __init__(self, target_dir, delete_after, sync_mode="all", lang="de", sort_into_date_folders=True, parent=None,
-                 import_dir=None, only_keys=None):
+                 import_dir=None, only_keys=None, only_paths=None):
         super().__init__(parent)
         # Sincronizar solo estos archivos de la camara ("carpeta|nombre"), elegidos
         # en "Elegir archivos..."; None = todos.
@@ -3729,6 +3750,8 @@ class SyncWorkerThread(QThread):
         # Importacion manual (menu "Importar SD / carpeta"): fuente elegida por
         # el usuario; nunca se borra nada del origen.
         self.import_dir = import_dir
+        # Importar solo estos archivos (elegidos en "Elegir archivos...").
+        self.only_paths = {os.path.normcase(os.path.abspath(x)) for x in only_paths} if only_paths else None
         if import_dir:
             self.sd_root = import_dir
             self.delete_after = False
@@ -3815,6 +3838,31 @@ class SyncWorkerThread(QThread):
         if not ok and errs:
             self._err(name, self._reason_from_exception(errs[-1]))
         return ok
+
+    @staticmethod
+    def _already_there(existing_index, name, size):
+        """Ya hay una copia con el mismo nombre y tamano en el destino."""
+        for existing_path in existing_candidates(existing_index, name):
+            try:
+                if os.path.getsize(existing_path) == size:
+                    return True
+            except Exception:
+                pass
+        return False
+
+    def _result_message(self, copied, total, already, deleted, errors):
+        """Mensaje final: cuenta solo lo que habia que copiar; lo que ya estaba va aparte."""
+        if total == 0 and not errors:
+            msg = tr(self.lang, "no_new_media")
+        else:
+            msg = tr(self.lang, "sync_result", copied=copied, total=total)
+        if already:
+            msg += tr(self.lang, "sync_already_suffix", n=already)
+        if self.delete_after:
+            msg += tr(self.lang, "sync_deleted_suffix", deleted=deleted)
+        if errors:
+            msg += tr(self.lang, "sync_errors_suffix", errors=errors)
+        return msg
 
     def _import_one(self, src, name, size, idx, total, existing_index, cam_folder):
         """Importa un archivo. Devuelve "ok", "already", "empty", "error" o "cancel"."""
@@ -3922,6 +3970,8 @@ class SyncWorkerThread(QThread):
     def _run_from_sd(self, sd_root):
         extensions = MEDIA_EXTENSIONS_BY_MODE[self.sync_mode]
         items = self._list_sd_media(sd_root, extensions)
+        if items is not None and self.only_paths is not None:
+            items = [it for it in items if os.path.normcase(os.path.abspath(it[0])) in self.only_paths]
         if items is None:
             self.finished_sync.emit(False, tr(self.lang, "sd_not_readable", root=sd_root), {})
             return
@@ -3948,9 +3998,22 @@ class SyncWorkerThread(QThread):
                     continue
                 index_existing(existing_index, f, os.path.join(root, f))
 
+        # Contar solo lo que hay que copiar: lo que ya esta no entra en el
+        # progreso ("1 de 15", no "1 de 177").
+        already = 0
+        to_delete = []
+        pending = []
+        for it in items:
+            if self._already_there(existing_index, it[1], it[2]):
+                already += 1
+                if self.delete_after:
+                    to_delete.append(it[0])
+            else:
+                pending.append(it)
+        items = pending
+        total = len(items)
         self.plan.emit([sz for _s, _n, sz in items])
         copied = errors = deleted = 0
-        to_delete = []
         cam_folder = quik_camera_folder(self.target_dir, self.device_name,
                                         [p for paths in existing_index.values() for p in paths])
 
@@ -4010,14 +4073,8 @@ class SyncWorkerThread(QThread):
                         pass
 
         result_data = {"total": total, "copied": copied, "deleted": deleted, "errors": errors,
-                       "error_list": list(self.error_list)}
-        msg = tr(self.lang, "sync_result", copied=copied, total=total)
-        if errors:
-            msg = msg.replace("✅", "⚠️", 1)
-        if self.delete_after:
-            msg += tr(self.lang, "sync_deleted_suffix", deleted=deleted)
-        if errors:
-            msg += tr(self.lang, "sync_errors_suffix", errors=errors)
+                       "already": already, "error_list": list(self.error_list)}
+        msg = self._result_message(copied, total, already, deleted, errors)
         self.finished_sync.emit(errors == 0, msg, result_data)
 
     def _copy_via_shell(self, path_components, name, dest_name, idx, total, size, dest_path):
@@ -4281,13 +4338,10 @@ class SyncWorkerThread(QThread):
         # frisch kopiert wurde - wird erst NACH der kompletten Kopierschleife
         # in einem Rutsch von der Kamera geloescht (siehe Phase 4 unten).
         to_delete_by_folder = {}
-        self.plan.emit([int(e.get("size") or 0) for e in items])
 
         # Einmalig ALLE bereits lokal vorhandenen Dateien erfassen (auch in
         # Datums-Unterordnern von frueheren Syncs) - so lassen sich schon
-        # synchronisierte Dateien weiterhin per Name+Groesse erkennen, ohne
-        # bei jeder einzelnen Datei erneut den kompletten Zielordner zu
-        # durchsuchen.
+        # synchronisierte Dateien per Name+Groesse erkennen.
         existing_index = {}
         for root, _dirs, files in os.walk(self.target_dir):
             for f in files:
@@ -4297,6 +4351,23 @@ class SyncWorkerThread(QThread):
                 index_existing(existing_index, f, os.path.join(root, f))
         cam_folder = quik_camera_folder(self.target_dir, self.device_name,
                                         [p for paths in existing_index.values() for p in paths])
+
+        # Contar solo lo que hay que copiar ("1 de 15", no "1 de 177"); lo que
+        # ya esta se borra de la camara igual si esta activado "borrar despues".
+        already = 0
+        pending = []
+        for e in items:
+            nm, sz = e.get("name") or "", e.get("size") or 0
+            if sz and self._already_there(existing_index, nm, sz):
+                already += 1
+                if self.delete_after:
+                    folder = tuple(x for x in (e.get("path") or "").split("|") if x)
+                    to_delete_by_folder.setdefault(folder, []).append(nm)
+            else:
+                pending.append(e)
+        items = pending
+        total = len(items)
+        self.plan.emit([int(e.get("size") or 0) for e in items])
 
         # --- Phase 2 + 3: pro Datei einzeln vergleichen und ggf. kopieren ---
         for idx, entry in enumerate(items, start=1):
@@ -4496,15 +4567,8 @@ class SyncWorkerThread(QThread):
                     time.sleep(2.0)
 
         result_data = {"total": total, "copied": copied, "deleted": deleted, "errors": errors,
-                       "error_list": list(self.error_list)}
-
-        msg = tr(self.lang, "sync_result", copied=copied, total=total)
-        if errors:
-            msg = msg.replace("✅", "⚠️", 1)
-        if self.delete_after:
-            msg += tr(self.lang, "sync_deleted_suffix", deleted=deleted)
-        if errors:
-            msg += tr(self.lang, "sync_errors_suffix", errors=errors)
+                       "already": already, "error_list": list(self.error_list)}
+        msg = self._result_message(copied, total, already, deleted, errors)
 
         self.finished_sync.emit(errors == 0, msg, result_data)
 
@@ -7567,14 +7631,14 @@ class SyncTabWidget(QWidget):
         if worker is not None and worker.isRunning():
             worker.cancel()
 
-    def start_import(self, folder, target=None):
+    def start_import(self, folder, target=None, only_paths=None):
         """Importa desde una carpeta o tarjeta elegida a mano (no hace falta
         tener la camara conectada). 'target' permite otro destino solo para
         esta importacion."""
         target = target or self.sync_target_dir
         if self._copy_busy():
             # Ya hay algo copiandose: se agrega a la cola y empieza solo al terminar.
-            if self._try_enqueue(("import", folder, target)):
+            if self._try_enqueue(("import", folder, target, only_paths)):
                 show_toast(self, tr(self.lang, "import_queued", folder=folder))
             return
         if _is_same_or_inside(folder, target) or _is_same_or_inside(target, folder):
@@ -7584,12 +7648,12 @@ class SyncTabWidget(QWidget):
         self.sync_popup.show()
         self.sync_worker = SyncWorkerThread(
             target, False, "all", self.lang,
-            self.config.get("sort_into_date_folders", True), self, import_dir=folder
+            self.config.get("sort_into_date_folders", True), self, import_dir=folder, only_paths=only_paths
         )
         self.sync_worker.progress.connect(self.on_sync_progress)
         self.sync_worker.finished_sync.connect(self.on_sync_done)
         self._camera_task_running = False
-        self._current_task = ("import", folder, target)
+        self._current_task = ("import", folder, target, only_paths)
         self._open_progress(tr(self.lang, "sync_title_import_from", folder=short_path(folder)))
         self.sync_worker.start()
 
@@ -7668,7 +7732,7 @@ class SyncTabWidget(QWidget):
             if task[0] == "camera":
                 QTimer.singleShot(400, lambda: self.start_sync(task[1], only_keys=task[2] if len(task) > 2 else None))
             else:
-                QTimer.singleShot(400, lambda: self.start_import(task[1], task[2]))
+                QTimer.singleShot(400, lambda: self.start_import(task[1], task[2], task[3] if len(task) > 3 else None))
             return
         if stats.get("copied", 0) > 0:
             SoundManager.play_finish()
@@ -8105,6 +8169,210 @@ def scan_import_source(source, target):
     return info
 
 
+def list_import_files(source, target):
+    """Archivos que se importarian desde 'source', con su estado respecto de
+    'target' (mismo criterio que la importacion: nombre + tamano)."""
+    exts = tuple(MEDIA_EXTENSIONS_BY_MODE["all"])
+    video_exts = tuple(MEDIA_EXTENSIONS_BY_MODE["videos"])
+    existing = {}
+    if target and os.path.isdir(target):
+        for root, _d, names in os.walk(target):
+            for n in names:
+                try:
+                    index_existing(existing, n, os.path.getsize(os.path.join(root, n)))
+                except OSError:
+                    pass
+    out = []
+    for root, dirs, names in os.walk(source):
+        dirs[:] = [d for d in dirs if not d.startswith((".", "$")) and d.upper() != "SYSTEM VOLUME INFORMATION"]
+        for n in names:
+            low = n.lower()
+            if not low.endswith(exts):
+                continue
+            full = os.path.join(root, n)
+            try:
+                st = os.stat(full)
+            except OSError:
+                continue
+            out.append({"path": full, "name": n, "size": st.st_size, "mtime": st.st_mtime,
+                        "video": low.endswith(video_exts),
+                        "synced": st.st_size in existing_candidates(existing, n)})
+    out.sort(key=lambda e: e["mtime"], reverse=True)
+    return out
+
+
+class _InflightUnion:
+    """inflight de dos proveedores, para que la grilla lo maneje como uno."""
+
+    def __init__(self, *providers):
+        self.providers = providers
+
+    def clear(self):
+        for pr in self.providers:
+            pr.inflight.clear()
+
+    def discard(self, key):
+        for pr in self.providers:
+            pr.inflight.discard(key)
+
+    def __contains__(self, key):
+        return any(key in pr.inflight for pr in self.providers)
+
+
+class MixedThumbProvider(QObject):
+    """Miniaturas de fotos y videos mezclados (una tarjeta SD): cada archivo
+    va al proveedor que corresponde."""
+    ready = Signal(str, QImage)
+
+    def __init__(self, lang, parent=None):
+        super().__init__(parent)
+        self.pics = ThumbProvider("picture", {}, lang, self)
+        self.vids = ThumbProvider("video", {}, lang, self)
+        self.pics.ready.connect(self.ready)
+        self.vids.ready.connect(self.ready)
+        self.inflight = _InflightUnion(self.pics, self.vids)
+        self._gen = 0
+
+    @property
+    def generation(self):
+        return self._gen
+
+    @generation.setter
+    def generation(self, value):
+        self._gen = value
+        self.pics.generation += 1
+        self.vids.generation += 1
+
+    def request(self, paths):
+        vexts = tuple(MEDIA_EXTENSIONS_BY_MODE["videos"])
+        self.vids.request([x for x in paths if x.lower().endswith(vexts)])
+        self.pics.request([x for x in paths if not x.lower().endswith(vexts)])
+
+    def shutdown(self):
+        self.pics.shutdown()
+        self.vids.shutdown()
+
+
+class ImportPickDialog(QDialog):
+    """Elegir que archivos de la tarjeta/carpeta importar: miniaturas por
+    fecha con marca de ya importado / nuevo y seleccion (como en la camara)."""
+
+    def __init__(self, parent, lang, source, target, accent, preselected=None):
+        super().__init__(parent)
+        self.lang, self.source, self.target = lang, source, target
+        self.entries = {}
+        self.all_paths = []
+        self._preselected = preselected
+        self.setWindowTitle(tr(lang, "import_pick_title"))
+        self.setModal(True)
+        self.resize(1120, 760)
+        self.setStyleSheet(f"""
+            QDialog {{ background: #1c1e29; }}
+            QLabel {{ color: #fff; background: transparent; }}
+            * {{ font-family: {FONT_STACK}; }}
+            QPushButton {{ background: rgba(255,255,255,0.08); color: #fff; border: 1px solid rgba(255,255,255,0.14);
+                          border-radius: 10px; padding: 8px 16px; font-weight: 600; }}
+            QPushButton:hover {{ background: rgba(255,255,255,0.16); }}
+            QPushButton#primary {{ background: {accent}; color: #0d0d12; border: none; font-weight: 800; }}
+            QPushButton#primary:disabled {{ background: rgba(255,255,255,0.12); color: rgba(255,255,255,0.4); }}
+        """)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(26, 22, 26, 20)
+        lay.setSpacing(10)
+        head = QHBoxLayout()
+        title = QLabel(tr(lang, "import_pick_title"))
+        title.setStyleSheet("font-size: 19px; font-weight: 800;")
+        head.addWidget(title)
+        head.addStretch()
+        self.btn_sel_new = QPushButton(tr(lang, "cam_select_new"))
+        self.btn_sel_none = QPushButton(tr(lang, "cam_select_none"))
+        self.btn_sel_new.clicked.connect(lambda: self._select(lambda e: not e["synced"] and e["size"] > 0))
+        self.btn_sel_none.clicked.connect(lambda: self._select(lambda e: False))
+        head.addWidget(self.btn_sel_new)
+        head.addWidget(self.btn_sel_none)
+        lay.addLayout(head)
+        row = QHBoxLayout()
+        self.lbl_summary = QLabel(tr(lang, "import_scanning"))
+        self.lbl_summary.setStyleSheet("font-size: 13px; color: rgba(255,255,255,0.6);")
+        hint = QLabel(tr(lang, "import_pick_hint"))
+        hint.setStyleSheet("font-size: 12px; color: rgba(255,255,255,0.4);")
+        self.chk_only_new = ToggleSwitch(tr(lang, "cam_only_new"))
+        self.chk_only_new.set_accent(accent)
+        self.chk_only_new.toggled.connect(lambda _s: self._apply_filter())
+        row.addWidget(self.lbl_summary)
+        row.addSpacing(16)
+        row.addWidget(hint)
+        row.addStretch()
+        row.addWidget(self.chk_only_new)
+        lay.addLayout(row)
+        self.view = ThumbGridView(self)
+        self.view.accent = QColor(accent)
+        self.view.selectable = True
+        self.view.activated.connect(self.view.toggle_selected)   # clic = elegir / quitar
+        self.view.selection_changed.connect(self._update_footer)
+        lay.addWidget(self.view, 1)
+        foot = QHBoxLayout()
+        self.lbl_sel = QLabel("")
+        self.lbl_sel.setStyleSheet(f"font-size: 13px; color: {accent};")
+        cancel = QPushButton(tr(lang, "cancel_btn"))
+        cancel.clicked.connect(self.reject)
+        self.btn_use = QPushButton(tr(lang, "import_pick_use"))
+        self.btn_use.setObjectName("primary")
+        self.btn_use.setEnabled(False)
+        self.btn_use.clicked.connect(self.accept)
+        foot.addWidget(self.lbl_sel)
+        foot.addStretch()
+        foot.addWidget(cancel)
+        foot.addWidget(self.btn_use)
+        lay.addLayout(foot)
+        self.provider = MixedThumbProvider(lang, self)
+        th = ScanThread(1, list_import_files, source, target)
+        th.done.connect(self._on_listed)
+        th.start()
+
+    def _on_listed(self, _token, entries):
+        if entries is None:
+            self.lbl_summary.setText(tr(self.lang, "import_empty"))
+            return
+        self.entries = {e["path"]: e for e in entries}
+        self.all_paths = [e["path"] for e in entries]
+        self.view.status = {pth: ("synced" if e["synced"] else "new") for pth, e in self.entries.items()}
+        self.view.tooltips = {pth: f"{e['name']}  ·  {_human_size(e['size'])}" for pth, e in self.entries.items()}
+        new = sum(1 for e in entries if not e["synced"])
+        self.lbl_summary.setText(tr(self.lang, "import_pick_summary", total=len(entries), new=new))
+        if self._preselected is not None:
+            self.view.selected = {x for x in self._preselected if x in self.entries}
+        else:
+            self.view.selected = {pth for pth, e in self.entries.items() if not e["synced"] and e["size"] > 0}
+        self._apply_filter(first=True)
+
+    def _apply_filter(self, first=False):
+        if not self.entries:
+            return
+        paths = [x for x in self.all_paths if not (self.chk_only_new.isChecked() and self.entries[x]["synced"])]
+        dates = [datetime.fromtimestamp(self.entries[x]["mtime"]).strftime("%Y-%m-%d") for x in paths]
+        self.view.set_items(paths, dates, {}, "picture", self.lang, provider=self.provider, keep_cache=not first)
+        self._update_footer()
+
+    def _select(self, pred):
+        self.view.selected = {x for x in self.view.files if pred(self.entries[x])}
+        self.view.viewport().update()
+        self._update_footer()
+
+    def _update_footer(self):
+        sel = [x for x in self.view.selected if x in self.entries]
+        self.lbl_sel.setText(tr(self.lang, "cam_selection", n=len(sel),
+                                size=_human_size(sum(self.entries[x]["size"] for x in sel))))
+        self.btn_use.setEnabled(bool(sel))
+
+    def selected_paths(self):
+        return [x for x in self.all_paths if x in self.view.selected]
+
+    def done(self, r):
+        self.view.shutdown()
+        super().done(r)
+
+
 _BG_SCANS = set()   # mantiene vivos los conteos aunque se cierre el dialogo
 
 
@@ -8138,6 +8406,8 @@ class ImportConfirmDialog(QDialog):
         self.lang = lang
         self.source = source
         self.target = target
+        self.accent = accent
+        self.only_paths = None       # None = todo lo nuevo; lista = solo esos archivos
         self.setWindowTitle(tr(lang, "import_confirm_title"))
         self.setModal(True)
         self.setMinimumWidth(560)
@@ -8186,6 +8456,10 @@ class ImportConfirmDialog(QDialog):
         lay.addWidget(self.lbl_new)
 
         buttons = QHBoxLayout()
+        self.btn_pick = QPushButton(tr(lang, "import_pick_btn"))
+        self.btn_pick.setEnabled(False)
+        self.btn_pick.clicked.connect(self._pick_files)
+        buttons.addWidget(self.btn_pick)
         buttons.addStretch()
         cancel = QPushButton(tr(lang, "cancel_btn"))
         cancel.clicked.connect(self.reject)
@@ -8204,6 +8478,8 @@ class ImportConfirmDialog(QDialog):
         self.lbl_summary.setText(tr(self.lang, "import_scanning"))
         self.lbl_new.setText("")
         self.btn_ok.setEnabled(False)
+        self.btn_pick.setEnabled(False)
+        self.only_paths = None           # cambio el origen o el destino: la eleccion anterior no vale
         # Contar en segundo plano: la ventana sigue respondiendo (se puede
         # cancelar o cambiar la carpeta mientras tanto).
         self._scan_token = getattr(self, "_scan_token", 0) + 1
@@ -8221,6 +8497,7 @@ class ImportConfirmDialog(QDialog):
         if info["photos"] + info["videos"] == 0:
             self.lbl_summary.setText(tr(self.lang, "import_empty"))
             return
+        self.btn_pick.setEnabled(True)
         self.lbl_summary.setText(tr(self.lang, "import_summary", photos=info["photos"], videos=info["videos"],
                                     size=_human_size(info["bytes"])))
         if info["new"] == 0:
@@ -8241,6 +8518,15 @@ class ImportConfirmDialog(QDialog):
         if d:
             self.target = os.path.normpath(d)
             self._refresh()
+
+    def _pick_files(self):
+        dlg = ImportPickDialog(self, self.lang, self.source, self.target, self.accent, preselected=self.only_paths)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        self.only_paths = dlg.selected_paths()
+        size = sum(dlg.entries[x]["size"] for x in self.only_paths)
+        self.lbl_new.setText(tr(self.lang, "import_picked", n=len(self.only_paths), size=_human_size(size)))
+        self.btn_ok.setEnabled(bool(self.only_paths))
 
     def accept(self):
         if _is_same_or_inside(self.source, self.target) or _is_same_or_inside(self.target, self.source):
@@ -11243,7 +11529,7 @@ class MainWindow(QWidget):
             return
         # 3) importar
         self._go_to_sync_page()
-        self.sync_page.start_import(dlg.source, dlg.target)
+        self.sync_page.start_import(dlg.source, dlg.target, only_paths=dlg.only_paths)
 
     def backup_from_menu(self):
         """Respaldar a disco: dialogo con carpeta a respaldar + destino
@@ -11606,6 +11892,41 @@ def bring_to_front(window):
         pass
 
 
+def apply_dark_titlebar(hwnd):
+    """Barra de titulo oscura (Windows 10 1809+ / 11) para que las ventanas
+    auxiliares no queden con la barra blanca sobre la app oscura."""
+    try:
+        hwnd = int(hwnd)
+        val = ctypes.c_int(1)
+        for attr in (20, 19):            # DWMWA_USE_IMMERSIVE_DARK_MODE (19 = Windows 10 viejos)
+            if ctypes.windll.dwmapi.DwmSetWindowAttribute(hwnd, attr, ctypes.byref(val), ctypes.sizeof(val)) == 0:
+                break
+        # Repintar el marco ya mismo (si no, se ve claro hasta el proximo cambio de foco)
+        SWP_NOSIZE, SWP_NOMOVE, SWP_NOZORDER, SWP_NOACTIVATE, SWP_FRAMECHANGED = 0x1, 0x2, 0x4, 0x10, 0x20
+        ctypes.windll.user32.SetWindowPos(hwnd, 0, 0, 0, 0, 0,
+                                          SWP_NOSIZE | SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED)
+    except Exception:
+        pass
+
+
+def install_dark_titlebars(app):
+    """Cada ventana nueva (dialogos, visores) recibe la barra oscura al
+    activarse; se marca para no repetirlo."""
+    done = set()
+
+    def on_focus(win):
+        if win is None:
+            return
+        try:
+            wid = int(win.winId())
+        except Exception:
+            return
+        if wid and wid not in done:
+            done.add(wid)
+            apply_dark_titlebar(wid)
+    app.focusWindowChanged.connect(on_focus)
+
+
 class TaskbarProgress:
     """Progreso en el icono de la barra de tareas (como el Explorador al
     copiar), via ITaskbarList3."""
@@ -11708,6 +12029,7 @@ def main():
     minimize_own_console()
     app = QApplication(sys.argv)
     app.setWindowIcon(load_app_icon())
+    install_dark_titlebars(app)
 
     config = load_config()
     def get_glow_color():
