@@ -318,6 +318,11 @@ TRANSLATIONS = {
         "cam_preview_loading": "Vorschau wird von der Kamera geholt…",
         "cam_preview_failed": "Die Vorschau konnte nicht von der Kamera geholt werden.",
         "cam_view_btn": "Dateien der Kamera ansehen",
+        "quit_busy_title": "Kopiervorgang läuft",
+        "quit_busy_question": "Es wird gerade kopiert. Trotzdem beenden?",
+        "quit_busy_detail": "Beim Beenden wird abgebrochen: Bereits Kopiertes bleibt erhalten, die halb kopierte Datei wird verworfen. Der nächste Sync macht dort weiter.",
+        "quit_busy_keep": "Weiter kopieren",
+        "quit_busy_quit": "Abbrechen und beenden",
         "cam_empty_file": "{name}: leere Datei (0 Byte), vermutlich eine abgebrochene Aufnahme",
         "cam_preview_too_big": "Dieses Video hat {size}: zum Ansehen bitte zuerst synchronisieren.",
         "cam_not_responding": "Die Kamera reagiert nicht. Bitte ab- und wieder anstecken (oder aus- und einschalten).",
@@ -603,6 +608,11 @@ TRANSLATIONS = {
         "cam_preview_loading": "Getting the preview from the camera…",
         "cam_preview_failed": "Could not get the preview from the camera.",
         "cam_view_btn": "View camera files",
+        "quit_busy_title": "Copy in progress",
+        "quit_busy_question": "A copy is in progress. Quit anyway?",
+        "quit_busy_detail": "Quitting now cancels it: everything already copied is kept and the half-copied file is discarded. The next sync picks up where it left off.",
+        "quit_busy_keep": "Keep copying",
+        "quit_busy_quit": "Cancel and quit",
         "cam_empty_file": "{name}: empty file (0 bytes), probably an interrupted recording",
         "cam_preview_too_big": "This video is {size}: sync it first to watch it.",
         "cam_not_responding": "The camera is not responding. Unplug it and plug it back in (or turn it off and on).",
@@ -888,6 +898,11 @@ TRANSLATIONS = {
         "cam_preview_loading": "Trayendo la vista previa desde la cámara…",
         "cam_preview_failed": "No se pudo traer la vista previa de la cámara.",
         "cam_view_btn": "Ver archivos de la cámara",
+        "quit_busy_title": "Copia en curso",
+        "quit_busy_question": "Hay una copia en curso. ¿Salir igual?",
+        "quit_busy_detail": "Si salís ahora se cancela: lo que ya se copió queda guardado y el archivo que estaba a medias se descarta. La próxima vez que sincronices sigue desde donde quedó.",
+        "quit_busy_keep": "Seguir copiando",
+        "quit_busy_quit": "Cancelar y salir",
         "cam_empty_file": "{name}: archivo vacío (0 bytes), probablemente una grabación que se cortó",
         "cam_preview_too_big": "Este video pesa {size}: para verlo, sincronizalo primero.",
         "cam_not_responding": "La cámara no responde. Desconectala y volvé a conectarla (o apagala y prendela).",
@@ -8699,6 +8714,47 @@ class ConfirmDeleteDialog(QDialog):
         lay.addLayout(row)
 
 
+class ConfirmQuitDialog(QDialog):
+    """Salir con una copia en curso: confirmar (con el estilo de la app)."""
+
+    def __init__(self, parent, lang):
+        super().__init__(parent)
+        self.setWindowTitle(tr(lang, "quit_busy_title"))
+        self.setModal(True)
+        self.setMinimumWidth(480)
+        self.setStyleSheet(
+            f"QDialog {{ background: #1c1e29; }} QLabel {{ color: #fff; background: transparent; }}"
+            f" * {{ font-family: {FONT_STACK}; }}"
+            " QPushButton { background: rgba(255,255,255,0.08); color: #fff; border: 1px solid rgba(255,255,255,0.14);"
+            " border-radius: 10px; padding: 8px 18px; font-weight: 600; }"
+            " QPushButton:hover { background: rgba(255,255,255,0.16); }"
+            " QPushButton#danger { background: #e5484d; border: none; font-weight: 800; }"
+            " QPushButton#danger:hover { background: #f2555a; }")
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(26, 22, 26, 20)
+        lay.setSpacing(10)
+        q = QLabel(tr(lang, "quit_busy_question"))
+        q.setWordWrap(True)
+        q.setStyleSheet("font-size: 17px; font-weight: 800;")
+        d = QLabel(tr(lang, "quit_busy_detail"))
+        d.setWordWrap(True)
+        d.setStyleSheet("font-size: 12px; color: rgba(255,255,255,0.65);")
+        lay.addWidget(q)
+        lay.addWidget(d)
+        lay.addSpacing(8)
+        row = QHBoxLayout()
+        row.addStretch()
+        keep = QPushButton(tr(lang, "quit_busy_keep"))
+        keep.setDefault(True)                 # Enter = seguir copiando (lo seguro)
+        keep.clicked.connect(self.reject)
+        ok = QPushButton(tr(lang, "quit_busy_quit"))
+        ok.setObjectName("danger")
+        ok.clicked.connect(self.accept)
+        row.addWidget(keep)
+        row.addWidget(ok)
+        lay.addLayout(row)
+
+
 def show_in_explorer(path):
     try:
         subprocess.Popen(["explorer", "/select,", os.path.normpath(path)])
@@ -11146,19 +11202,46 @@ class MainWindow(QWidget):
                 tray.showMessage("GoPro Sync", tr(self.lang, "tray_hidden_msg"),
                                  QSystemTrayIcon.MessageIcon.Information, 5000)
             return
+        if not getattr(self, "_quit_confirmed", False) and not self._stop_tasks_for_quit():
+            event.ignore()
+            self._really_quit = False
+            return
+        self.camera_page.close_workers()
         monitor = getattr(self.sync_page, "monitor_thread", None)
         if monitor is not None:
             monitor.stop()
             monitor.wait(3000)
         super().closeEvent(event)
 
+    def _stop_tasks_for_quit(self):
+        """Si hay una copia en curso, pregunta y la cancela prolija (cortar el
+        proceso a mitad de una lectura deja a la camara trabada). Devuelve
+        False si el usuario prefiere seguir copiando."""
+        sp = self.sync_page
+        if not sp._busy():
+            return True
+        if self.isHidden():
+            self.showNormal()
+            bring_to_front(self)
+        if ConfirmQuitDialog(self, self.lang).exec() != QDialog.DialogCode.Accepted:
+            return False
+        sp._import_queue.clear()
+        for attr in ("sync_worker", "backup_worker"):
+            w = getattr(sp, attr, None)
+            if w is not None and w.isRunning():
+                w.cancel()
+        for attr in ("sync_worker", "backup_worker"):
+            w = getattr(sp, attr, None)
+            if w is not None and w.isRunning():
+                w.wait(15000)
+        self._quit_confirmed = True
+        return True
+
     def quit_app(self):
         """Salir de verdad (menu de la bandeja)."""
+        if not self._stop_tasks_for_quit():
+            return
         self._really_quit = True
-        worker = getattr(self.sync_page, "sync_worker", None)
-        if worker is not None and worker.isRunning():
-            worker.cancel()
-            worker.wait(5000)
         tray = getattr(self, "tray", None)
         if tray is not None:
             tray.hide()
