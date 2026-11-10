@@ -7926,9 +7926,23 @@ def short_path(path, keep=2):
     return drive + os.sep + "…" + os.sep + os.sep.join(parts[-keep:])
 
 
-def wrap_path(path):
-    """Permite que un QLabel con wordWrap corte una ruta larga en las barras."""
-    return (path or "").replace("\\", "\\\u200b")
+def wrap_path(path, width=58):
+    """Corta una ruta larga en varias lineas, en las barras. Antes se usaba un
+    espacio invisible (U+200B) para que el QLabel cortara solo, pero Century
+    Gothic no lo tiene y Windows tardaba ~2 s buscando otra fuente: la
+    ventana quedaba congelada ("No responde") al abrir cada dialogo."""
+    path = path or ""
+    if len(path) <= width:
+        return path
+    lines, cur = [], ""
+    for part in re.split(r"(?<=[\\/])", path):
+        if cur and len(cur) + len(part) > width:
+            lines.append(cur)
+            cur = ""
+        cur += part
+    if cur:
+        lines.append(cur)
+    return "\n".join(lines)
 
 
 def _human_size(num_bytes):
@@ -7972,6 +7986,30 @@ def scan_import_source(source, target):
                 info["new"] += 1
                 info["new_bytes"] += size
     return info
+
+
+_BG_SCANS = set()   # mantiene vivos los conteos aunque se cierre el dialogo
+
+
+class ScanThread(QThread):
+    """Corre un conteo de archivos (func(*args)) fuera del hilo de la
+    interfaz: con una tarjeta SD o un disco lento, contar en el hilo
+    principal congelaba la ventana y Windows ponia "No responde"."""
+    done = Signal(int, object)        # token, resultado (None si fallo)
+
+    def __init__(self, token, func, *args):
+        super().__init__()
+        self.token, self.func, self.args = token, func, args
+        _BG_SCANS.add(self)
+        self.finished.connect(lambda: _BG_SCANS.discard(self))
+
+    def run(self):
+        try:
+            result = self.func(*self.args)
+        except Exception as e:
+            print("[Conteo]", e)
+            result = None
+        self.done.emit(self.token, result)
 
 
 class ImportConfirmDialog(QDialog):
@@ -8049,12 +8087,19 @@ class ImportConfirmDialog(QDialog):
         self.lbl_summary.setText(tr(self.lang, "import_scanning"))
         self.lbl_new.setText("")
         self.btn_ok.setEnabled(False)
-        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
-        QApplication.processEvents()
-        try:
-            info = scan_import_source(self.source, self.target)
-        finally:
-            QApplication.restoreOverrideCursor()
+        # Contar en segundo plano: la ventana sigue respondiendo (se puede
+        # cancelar o cambiar la carpeta mientras tanto).
+        self._scan_token = getattr(self, "_scan_token", 0) + 1
+        th = ScanThread(self._scan_token, scan_import_source, self.source, self.target)
+        th.done.connect(self._on_scanned)
+        th.start()
+
+    def _on_scanned(self, token, info):
+        if token != self._scan_token:
+            return                  # resultado viejo: se cambio la carpeta o el destino
+        if info is None:
+            self.lbl_summary.setText(tr(self.lang, "import_empty"))
+            return
         self.info = info
         if info["photos"] + info["videos"] == 0:
             self.lbl_summary.setText(tr(self.lang, "import_empty"))
@@ -8210,12 +8255,17 @@ class BackupDialog(QDialog):
             return
         self.lbl_summary.setText(tr(self.lang, "import_scanning"))
         self.lbl_pending.setText("")
-        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
-        QApplication.processEvents()
-        try:
-            info = scan_backup(self.source, self.dest)
-        finally:
-            QApplication.restoreOverrideCursor()
+        self._scan_token = getattr(self, "_scan_token", 0) + 1
+        th = ScanThread(self._scan_token, scan_backup, self.source, self.dest)
+        th.done.connect(self._on_scanned)
+        th.start()
+
+    def _on_scanned(self, token, info):
+        if token != self._scan_token:
+            return                  # resultado viejo: se cambio la carpeta o el destino
+        if info is None:
+            self.lbl_summary.setText("")
+            return
         self.lbl_summary.setText(tr(self.lang, "backup_summary", total=info["total"], size=_human_size(info["bytes"])))
         if info["pending"] == 0:
             self.lbl_pending.setText(tr(self.lang, "backup_up_to_date"))
