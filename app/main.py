@@ -318,6 +318,10 @@ TRANSLATIONS = {
         "cam_preview_loading": "Vorschau wird von der Kamera geholt…",
         "cam_preview_failed": "Die Vorschau konnte nicht von der Kamera geholt werden.",
         "cam_view_btn": "Dateien der Kamera ansehen",
+        "backup_title": "Backup nach {dest}",
+        "backup_queued": "Backup in der Warteschlange: startet, sobald die laufende Kopie fertig ist.",
+        "queue_backup_item": "Backup nach {dest}",
+        "busy_backup": "Backup läuft",
         "quit_busy_title": "Kopiervorgang läuft",
         "quit_busy_question": "Es wird gerade kopiert. Trotzdem beenden?",
         "quit_busy_detail": "Beim Beenden wird abgebrochen: Bereits Kopiertes bleibt erhalten, die halb kopierte Datei wird verworfen. Der nächste Sync macht dort weiter.",
@@ -608,6 +612,10 @@ TRANSLATIONS = {
         "cam_preview_loading": "Getting the preview from the camera…",
         "cam_preview_failed": "Could not get the preview from the camera.",
         "cam_view_btn": "View camera files",
+        "backup_title": "Backup to {dest}",
+        "backup_queued": "Backup queued: it starts when the current copy finishes.",
+        "queue_backup_item": "Backup to {dest}",
+        "busy_backup": "Backing up",
         "quit_busy_title": "Copy in progress",
         "quit_busy_question": "A copy is in progress. Quit anyway?",
         "quit_busy_detail": "Quitting now cancels it: everything already copied is kept and the half-copied file is discarded. The next sync picks up where it left off.",
@@ -898,6 +906,10 @@ TRANSLATIONS = {
         "cam_preview_loading": "Trayendo la vista previa desde la cámara…",
         "cam_preview_failed": "No se pudo traer la vista previa de la cámara.",
         "cam_view_btn": "Ver archivos de la cámara",
+        "backup_title": "Respaldo a {dest}",
+        "backup_queued": "Respaldo en cola: empieza cuando termine lo que se está copiando.",
+        "queue_backup_item": "Respaldo a {dest}",
+        "busy_backup": "Respaldando",
         "quit_busy_title": "Copia en curso",
         "quit_busy_question": "Hay una copia en curso. ¿Salir igual?",
         "quit_busy_detail": "Si salís ahora se cancela: lo que ya se copió queda guardado y el archivo que estaba a medias se descarta. La próxima vez que sincronices sigue desde donde quedó.",
@@ -3500,6 +3512,10 @@ class BackupWorkerThread(QThread):
     respaldo, asi un borrado accidental en el PC no se propaga."""
     progress = Signal(int, int, str, float)
     finished_backup = Signal(bool, str, dict)
+    # Misma interfaz que SyncWorkerThread: asi corre en Actividad como
+    # cualquier copia (progreso total, cancelar, cola, barra de tareas).
+    finished_sync = Signal(bool, str, dict)
+    plan = Signal(object)
 
     def __init__(self, source_dir, backup_dirs, lang="de", parent=None):
         super().__init__(parent)
@@ -3525,14 +3541,19 @@ class BackupWorkerThread(QThread):
                 return False
         return False
 
+    def _finish(self, ok, message, info):
+        self.finished_backup.emit(ok, message, info)
+        self.finished_sync.emit(ok, message, info)
+
     def run(self):
         if not self.backup_dirs:
-            self.finished_backup.emit(False, tr(self.lang, "backup_none"), {})
+            self._finish(False, tr(self.lang, "backup_none"), {})
             return
-        self.progress.emit(0, 0, "__CLEANUP__" + tr(self.lang, "backup_scanning"), 0.0)
 
         files = []
         for root, _dirs, names in os.walk(self.source_dir):
+            if self._cancel:
+                break
             for n in names:
                 if n.endswith(".part"):
                     continue
@@ -3543,13 +3564,15 @@ class BackupWorkerThread(QThread):
                     continue
                 files.append((full, os.path.relpath(full, self.source_dir), st.st_size, st.st_mtime))
 
-        copied = skipped = errors = 0
+        skipped = 0
         missing = []
+        pending = []          # (src, rel, size, dst) de TODOS los destinos
         for dest_root in self.backup_dirs:
+            if self._cancel:
+                break
             if _is_same_or_inside(dest_root, self.source_dir) or not self._dest_available(dest_root):
                 missing.append(dest_root)
                 continue
-            pending = []
             for src, rel, size, mtime in files:
                 dst = os.path.join(dest_root, rel)
                 try:
@@ -3561,40 +3584,46 @@ class BackupWorkerThread(QThread):
                 except OSError:
                     pass
                 pending.append((src, rel, size, dst))
+        self.plan.emit([size for _s, _r, size, _d in pending])
 
-            total = len(pending)
-            for idx, (src, rel, size, dst) in enumerate(pending, start=1):
-                if self._cancel:
-                    break
-                name = os.path.basename(rel)
-                self.progress.emit(idx, total, name, 0.0)
-                try:
-                    os.makedirs(os.path.dirname(dst), exist_ok=True)
-                except Exception:
-                    errors += 1
-                    continue
+        copied = errors = 0
+        error_list = []
+        total = len(pending)
+        for idx, (src, rel, size, dst) in enumerate(pending, start=1):
+            if self._cancel:
+                break
+            name = os.path.basename(rel)
+            self.progress.emit(idx, total, name, 0.0)
+            try:
+                os.makedirs(os.path.dirname(dst), exist_ok=True)
+            except Exception as e:
+                errors += 1
+                error_list.append({"name": name, "reason": str(e)})
+                continue
 
-                def cb(pct, idx=idx, total=total, name=name):
-                    self.progress.emit(idx, total, name, pct)
+            def cb(pct, idx=idx, total=total, name=name):
+                self.progress.emit(idx, total, name, pct)
 
-                if copy_file_preserving(src, dst, size, cb):
-                    copied += 1
-                    self.progress.emit(idx, total, name, 100.0)
-                else:
-                    errors += 1
+            errs = []
+            if copy_file_preserving(src, dst, size, cb, should_cancel=lambda: self._cancel, errors_out=errs):
+                copied += 1
+                self.progress.emit(idx, total, name, 100.0)
+            elif not self._cancel:
+                errors += 1
+                error_list.append({"name": name, "reason": str(errs[0]) if errs else tr(self.lang, "err_unknown")})
 
+        info = {"copied": copied, "skipped": skipped, "errors": errors, "missing": missing,
+                "error_list": error_list, "total": total}
         if self._cancel:
-            self.finished_backup.emit(False, tr(self.lang, "backup_cancelled", copied=copied),
-                                      {"copied": copied, "skipped": skipped, "errors": errors, "missing": missing,
-                                       "cancelled": True})
+            info["cancelled"] = True
+            self._finish(False, tr(self.lang, "backup_cancelled", copied=copied), info)
             return
         msg = tr(self.lang, "backup_done", copied=copied, skipped=skipped)
         if missing:
             msg += tr(self.lang, "backup_missing_suffix", dirs=", ".join(missing))
         if errors:
             msg += tr(self.lang, "backup_errors_suffix", errors=errors)
-        self.finished_backup.emit(errors == 0 and not missing, msg,
-                                  {"copied": copied, "skipped": skipped, "errors": errors, "missing": missing})
+        self._finish(errors == 0 and not missing, msg, info)
 
 
 class SyncWorkerThread(QThread):
@@ -7318,6 +7347,9 @@ class SyncTabWidget(QWidget):
             if task[0] == "camera":
                 text = tr(self.lang, "queue_camera_long")
                 out.append((text, text))
+            elif task[0] == "backup":
+                out.append((tr(self.lang, "queue_backup_item", dest=short_path(task[2][0])),
+                            f"{task[1]}  →  {', '.join(task[2])}"))
             else:
                 out.append((tr(self.lang, "queue_import_item", folder=short_path(task[1])), f"{task[1]}  →  {task[2]}"))
         return out
@@ -7326,6 +7358,9 @@ class SyncTabWidget(QWidget):
     def _task_key(task):
         if task[0] == "camera":
             return ("camera",)
+        if task[0] == "backup":
+            return ("backup", os.path.normcase(os.path.abspath(task[1])),
+                    tuple(os.path.normcase(os.path.abspath(d)) for d in task[2]))
         return ("import", os.path.normcase(os.path.abspath(task[1])), os.path.normcase(os.path.abspath(task[2])))
 
     def _try_enqueue(self, task):
@@ -7455,6 +7490,7 @@ class SyncTabWidget(QWidget):
 
     @Slot(bool, str, dict)
     def on_sync_done(self, success, message, stats):
+        was_backup = bool(self._current_task) and self._current_task[0] == "backup"
         self.btn_sync.set_idle(self.gopro_connected)
         was_camera = self._camera_task_running
         self._camera_task_running = False
@@ -7469,51 +7505,49 @@ class SyncTabWidget(QWidget):
         if self._import_queue and not stats.get("cancelled"):
             task = self._import_queue.pop(0)
             self._refresh_queue()
-            if stats.get("copied", 0) > 0:
+            if stats.get("copied", 0) > 0 and not was_backup:
                 self.sync_finished.emit()
             if task[0] == "camera":
                 QTimer.singleShot(400, lambda: self.start_sync(task[1], only_keys=task[2] if len(task) > 2 else None))
+            elif task[0] == "backup":
+                QTimer.singleShot(400, lambda: self.start_backup(task[1], list(task[2])))
             else:
                 QTimer.singleShot(400, lambda: self.start_import(task[1], task[2]))
             return
         if stats.get("copied", 0) > 0:
             SoundManager.play_finish()
+        if was_backup:
+            return            # un respaldo no cambia la biblioteca ni dispara otro respaldo
         self.sync_finished.emit()
         if (stats.get("copied", 0) > 0 and self.config.get("backup_after_sync", True)
                 and self.config.get("backup_dirs")):
             # Mostrar unos segundos el resultado del sync antes del respaldo.
             QTimer.singleShot(2500, self.start_backup)
 
-    def start_backup(self):
-        """Copia el destino local a los discos de respaldo configurados."""
-        if self._busy():
-            show_toast(self, tr(self.lang, "busy_wait"))
-            return
-        dirs = self.config.get("backup_dirs") or []
-        if not dirs:
+    def start_backup(self, source=None, dests=None):
+        """Respalda la biblioteca (u otra carpeta) a los discos elegidos, en
+        segundo plano: se ve en Actividad, se puede cancelar y se encola si
+        ya hay otra copia en curso."""
+        source = source or self.sync_target_dir
+        dests = [d for d in (dests if dests is not None else (self.config.get("backup_dirs") or [])) if d]
+        if not dests:
             self.sync_popup.setText(tr(self.lang, "backup_none"))
             self.sync_popup.show()
             QTimer.singleShot(5000, self._hide_sync_popup)
             return
-        self.backup_worker = BackupWorkerThread(self.sync_target_dir, dirs, self.lang, self)
-        self.backup_worker.progress.connect(self.on_backup_progress)
-        self.backup_worker.finished_backup.connect(self.on_backup_done)
-        self.backup_worker.start()
-
-    @Slot(int, int, str, float)
-    def on_backup_progress(self, current, total, name, file_pct):
-        if name.startswith("__CLEANUP__"):
-            self.sync_popup.setText(name[len("__CLEANUP__"):])
-        else:
-            self.sync_popup.setText(tr(self.lang, "backup_running", current=current, total=total, name=name)
-                                    + f"  {file_pct:.0f}%")
-        self.sync_popup.show()
-
-    @Slot(bool, str, dict)
-    def on_backup_done(self, success, message, stats):
-        self.sync_popup.setText(message)
-        self.sync_popup.show()
-        QTimer.singleShot(10000, self._hide_sync_popup)
+        task = ("backup", source, tuple(dests))
+        if self._busy():
+            if self._try_enqueue(task):
+                show_toast(self, tr(self.lang, "backup_queued"))
+            return
+        self.sync_worker = BackupWorkerThread(source, dests, self.lang, self)
+        self.sync_worker.progress.connect(self.on_sync_progress)
+        self.sync_worker.finished_sync.connect(self.on_sync_done)
+        self._camera_task_running = False
+        self._current_task = task
+        dest_label = short_path(dests[0]) + (f" (+{len(dests) - 1})" if len(dests) > 1 else "")
+        self._open_progress(tr(self.lang, "backup_title", dest=dest_label))
+        self.sync_worker.start()
 
     def _hide_sync_popup(self):
         busy = any(getattr(self, attr, None) is not None and getattr(self, attr).isRunning()
@@ -8022,16 +8056,14 @@ def scan_backup(source, dest):
 
 
 class BackupDialog(QDialog):
-    """Respaldar a disco: 1) confirmar carpeta a respaldar y destino
-    (ambos cambiables) con un resumen; 2) progreso de la copia."""
+    """Respaldar a disco: confirmar carpeta a respaldar y destino (ambos
+    cambiables) con un resumen. La copia corre despues en Actividad."""
 
     def __init__(self, parent, lang, source, dest, accent, remember_default=True):
         super().__init__(parent)
         self.lang = lang
         self.source = source
         self.dest = dest or ""
-        self.worker = None
-        self.result_info = None
         self.setWindowTitle(tr(lang, "backup_dialog_title"))
         self.setModal(True)
         self.setMinimumWidth(580)
@@ -8106,38 +8138,6 @@ class BackupDialog(QDialog):
         lay.addLayout(b1)
         self.pages.addWidget(p1)
 
-        # ---- pagina 2: progreso
-        p2 = QWidget()
-        lay2 = QVBoxLayout(p2)
-        lay2.setContentsMargins(0, 8, 0, 0)
-        lay2.setSpacing(12)
-        self.lbl_count = QLabel()
-        self.lbl_count.setStyleSheet("font-size: 15px; font-weight: 700;")
-        self.bar = QProgressBar()
-        self.bar.setRange(0, 1000)
-        self.bar.setTextVisible(False)
-        self.lbl_file = QLabel()
-        self.lbl_file.setStyleSheet("font-size: 12px; color: rgba(255,255,255,0.6);")
-        self.lbl_result = QLabel()
-        self.lbl_result.setWordWrap(True)
-        self.lbl_result.setStyleSheet("font-size: 13px;")
-        lay2.addWidget(self.lbl_count)
-        lay2.addWidget(self.bar)
-        lay2.addWidget(self.lbl_file)
-        lay2.addWidget(self.lbl_result)
-        lay2.addStretch()
-        b2 = QHBoxLayout()
-        b2.addStretch()
-        self.btn_cancel_run = QPushButton(tr(lang, "cancel_btn"))
-        self.btn_cancel_run.clicked.connect(self._cancel_run)
-        self.btn_close = QPushButton(tr(lang, "close_btn2"))
-        self.btn_close.setObjectName("primary")
-        self.btn_close.clicked.connect(self.accept)
-        self.btn_close.hide()
-        b2.addWidget(self.btn_cancel_run)
-        b2.addWidget(self.btn_close)
-        lay2.addLayout(b2)
-        self.pages.addWidget(p2)
         self._refresh()
 
     # ---- confirmacion
@@ -8178,44 +8178,11 @@ class BackupDialog(QDialog):
             self.dest = os.path.normpath(d)
             self._refresh()
 
-    # ---- progreso
     def _start(self):
         if _is_same_or_inside(self.dest, self.source) or _is_same_or_inside(self.source, self.dest):
             show_toast(self, tr(self.lang, "backup_same_as_target"))
             return
-        self.pages.setCurrentIndex(1)
-        self.worker = BackupWorkerThread(self.source, [self.dest], self.lang, self)
-        self.worker.progress.connect(self._on_progress)
-        self.worker.finished_backup.connect(self._on_done)
-        self.worker.start()
-
-    def _on_progress(self, current, total, name, pct):
-        if name.startswith("__CLEANUP__"):
-            self.lbl_count.setText(name[len("__CLEANUP__"):])
-            return
-        if total:
-            self.lbl_count.setText(tr(self.lang, "backup_progress", current=current, total=total))
-            self.bar.setValue(int(((current - 1) + pct / 100.0) / total * 1000))
-        self.lbl_file.setText(f"{name}  ·  {pct:.0f}%")
-
-    def _on_done(self, ok, message, info):
-        self.result_info = info
-        self.bar.setValue(1000 if not info.get("cancelled") else self.bar.value())
-        self.lbl_file.setText("")
-        self.lbl_result.setText(message)
-        self.btn_cancel_run.hide()
-        self.btn_close.show()
-
-    def _cancel_run(self):
-        if self.worker is not None and self.worker.isRunning():
-            self.worker.cancel()
-            self.btn_cancel_run.setEnabled(False)
-
-    def reject(self):
-        if self.worker is not None and self.worker.isRunning():
-            self._cancel_run()      # cerrar la ventana durante la copia = cancelar
-            return
-        super().reject()
+        self.accept()      # la copia corre en segundo plano (Actividad)
 
     def remember(self):
         return self.chk_remember.isChecked()
@@ -10831,6 +10798,8 @@ class MainWindow(QWidget):
             lambda root: show_toast(self, tr(self.lang, "card_detected", root=root)))
         self.sync_page.activity_progress.connect(
             lambda pct: self.btn_nav_activity.set_progress(pct, self.get_current_theme_color()))
+        self.taskbar = TaskbarProgress(self)
+        self.sync_page.activity_progress.connect(self.taskbar.set)
 
         # Assistent nur bauen, wenn er tatsaechlich noch gebraucht wird -
         # spart bei jedem normalen Start (nach der ersten Einrichtung) das
@@ -11038,19 +11007,18 @@ class MainWindow(QWidget):
 
     def backup_from_menu(self):
         """Respaldar a disco: dialogo con carpeta a respaldar + destino
-        (cambiables), confirmacion y progreso."""
-        if self.sync_page._busy():
-            show_toast(self, tr(self.lang, "busy_wait"))
-            return
+        (cambiables) y confirmacion; la copia sigue en segundo plano."""
         dirs = list(self.config.get("backup_dirs") or [])
         dlg = BackupDialog(self, self.lang, self.sync_page.sync_target_dir, dirs[0] if dirs else "",
                            self.config.get("accent_color", "#00f2fe"))
-        dlg.exec()
-        if dlg.worker is not None and dlg.remember() and dlg.dest:
-            if not any(os.path.normcase(d) == os.path.normcase(dlg.dest) for d in dirs):
-                dirs.append(dlg.dest)
-                self.config["backup_dirs"] = dirs
-                save_config(self.config)
+        if not dlg.exec() or not dlg.dest:
+            return
+        if dlg.remember() and not any(os.path.normcase(d) == os.path.normcase(dlg.dest) for d in dirs):
+            dirs.append(dlg.dest)
+            self.config["backup_dirs"] = dirs
+            save_config(self.config)
+        self.show_activity()
+        self.sync_page.start_backup(dlg.source, [dlg.dest])
 
     def choose_language(self, new_lang):
         """Guarda el idioma elegido (asistente/dialogo) y traduce la app al momento."""
@@ -11193,6 +11161,12 @@ class MainWindow(QWidget):
 
     def show_activity(self):
         self.switch_page(self.ACTIVITY_INDEX, self.btn_nav_activity)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        tb = getattr(self, "taskbar", None)
+        if tb is not None and tb.last is not None:
+            QTimer.singleShot(600, tb.apply)
 
     def closeEvent(self, event):
         # Con inicio automatico (icono en la bandeja), cerrar la ventana la
@@ -11385,6 +11359,70 @@ def bring_to_front(window):
         pass
 
 
+class TaskbarProgress:
+    """Progreso en el icono de la barra de tareas (como el Explorador al
+    copiar), via ITaskbarList3."""
+    TBPF_NOPROGRESS, TBPF_NORMAL = 0, 2
+
+    def __init__(self, window):
+        self.window = window
+        self.tb = None
+        self.last = None
+        try:
+            import comtypes
+            import comtypes.client
+            from comtypes import GUID, IUnknown, COMMETHOD, HRESULT
+            from ctypes import c_int, c_ulonglong, wintypes
+
+            class ITaskbarList(IUnknown):
+                _iid_ = GUID("{56FDF342-FD6D-11d0-958A-006097C9A090}")
+                _methods_ = [COMMETHOD([], HRESULT, "HrInit"),
+                             COMMETHOD([], HRESULT, "AddTab", (["in"], wintypes.HWND, "hwnd")),
+                             COMMETHOD([], HRESULT, "DeleteTab", (["in"], wintypes.HWND, "hwnd")),
+                             COMMETHOD([], HRESULT, "ActivateTab", (["in"], wintypes.HWND, "hwnd")),
+                             COMMETHOD([], HRESULT, "SetActiveAlt", (["in"], wintypes.HWND, "hwnd"))]
+
+            class ITaskbarList2(ITaskbarList):
+                _iid_ = GUID("{602D4995-B13A-429b-A66E-1935E44F4317}")
+                _methods_ = [COMMETHOD([], HRESULT, "MarkFullscreenWindow",
+                                       (["in"], wintypes.HWND, "hwnd"), (["in"], wintypes.BOOL, "full"))]
+
+            class ITaskbarList3(ITaskbarList2):
+                _iid_ = GUID("{EA1AFB91-9E28-4B86-90E9-9E9F8A5EEFAF}")
+                _methods_ = [COMMETHOD([], HRESULT, "SetProgressValue", (["in"], wintypes.HWND, "hwnd"),
+                                       (["in"], c_ulonglong, "done"), (["in"], c_ulonglong, "total")),
+                             COMMETHOD([], HRESULT, "SetProgressState", (["in"], wintypes.HWND, "hwnd"),
+                                       (["in"], c_int, "flags"))]
+
+            self.tb = comtypes.client.CreateObject(GUID("{56FDF344-FD6D-11d0-958A-006097C9A090}"),
+                                                   interface=ITaskbarList3)
+            self.tb.HrInit()
+        except Exception as e:
+            print("[Barra de tareas] sin progreso:", e)
+            self.tb = None
+
+    def set(self, pct):
+        """pct 0-100, o None para quitarlo."""
+        value = None if pct is None else int(round(pct * 10))
+        if value == self.last:
+            return
+        self.last = value
+        self.apply()
+
+    def apply(self):
+        if self.tb is None:
+            return
+        try:
+            hwnd = int(self.window.winId())
+            if self.last is None:
+                self.tb.SetProgressState(hwnd, self.TBPF_NOPROGRESS)
+            else:
+                self.tb.SetProgressState(hwnd, self.TBPF_NORMAL)
+                self.tb.SetProgressValue(hwnd, max(0, min(1000, self.last)), 1000)
+        except Exception:
+            pass
+
+
 def setup_tray(app, window, lang):
     """Icono junto al reloj: clic = abrir; menu: Abrir / Salir. Muestra el
     progreso de la copia en curso al pasar el mouse."""
@@ -11408,7 +11446,9 @@ def setup_tray(app, window, lang):
         if pct is None:
             tray.setToolTip("GoPro Sync")
         else:
-            task = tr(lang, "busy_syncing" if window.sync_page._camera_task_running else "busy_importing")
+            cur = window.sync_page._current_task
+            kind = cur[0] if cur else ""
+            task = tr(lang, "busy_syncing" if kind == "camera" else ("busy_backup" if kind == "backup" else "busy_importing"))
             tray.setToolTip(tr(lang, "tray_tooltip_busy", task=task, pct=int(pct)))
     window.sync_page.activity_progress.connect(progress)
     tray.show()
