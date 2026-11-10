@@ -3459,6 +3459,8 @@ def copy_file_preserving(src, dst, size=None, progress_cb=None, should_cancel=No
                     if pct - last_pct >= 0.5:
                         progress_cb(pct)
                         last_pct = pct
+            fdst.flush()
+            os.fsync(fdst.fileno())       # a disco ANTES de renombrar: un corte de luz no deja un archivo vacio
         if os.path.getsize(tmp) != size:
             raise IOError("size_mismatch")
         shutil.copystat(src, tmp)
@@ -9243,6 +9245,8 @@ class WpdCameraSession:
                     done += got
                     if progress:
                         progress(done)
+                f.flush()
+                os.fsync(f.fileno())      # a disco ANTES de renombrar (corte de luz / borrar de la camara)
             os.replace(part, dest)
             return True
         finally:
@@ -11237,6 +11241,23 @@ class MainWindow(QWidget):
         self._quit_confirmed = True
         return True
 
+    def on_session_end(self, *_):
+        """Windows se apaga o cierra sesion: cancelar las copias prolijo, sin
+        preguntar (Windows da unos pocos segundos)."""
+        sp = self.sync_page
+        sp._import_queue.clear()
+        for attr in ("sync_worker", "backup_worker"):
+            w = getattr(sp, attr, None)
+            if w is not None and w.isRunning():
+                w.cancel()
+        for attr in ("sync_worker", "backup_worker"):
+            w = getattr(sp, attr, None)
+            if w is not None and w.isRunning():
+                w.wait(4000)
+        self.camera_page.close_workers()
+        self._quit_confirmed = True
+        self._really_quit = True
+
     def quit_app(self):
         """Salir de verdad (menu de la bandeja)."""
         if not self._stop_tasks_for_quit():
@@ -11428,6 +11449,7 @@ def main():
         # junto al reloj vigilando la camara; la ventana se abre con un clic
         # en el icono (o sola al conectar la GoPro si esta activado).
         window = MainWindow()
+        app.commitDataRequest.connect(window.on_session_end)
         setup_tray(app, window, config.get("language", "es"))
         if open_on_connect:
             window.sync_page.monitor_thread.connection_changed.connect(window.show_from_background_on_connect)
@@ -11457,6 +11479,7 @@ def main():
         BOOT_PROGRESS = _boot
         start_time = time.monotonic()
         window = MainWindow()
+        app.commitDataRequest.connect(window.on_session_end)
         BOOT_PROGRESS = None
         splash.set_status(100, tr(boot_lang, "boot_done"))
         build_ms = (time.monotonic() - start_time) * 1000
