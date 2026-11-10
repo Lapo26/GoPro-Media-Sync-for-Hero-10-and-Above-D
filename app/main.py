@@ -318,6 +318,9 @@ TRANSLATIONS = {
         "cam_preview_loading": "Vorschau wird von der Kamera geholt…",
         "cam_preview_failed": "Die Vorschau konnte nicht von der Kamera geholt werden.",
         "cam_view_btn": "Dateien der Kamera ansehen",
+        "err_stalled": "Konnte nicht gelesen werden: keine Antwort bei dieser Datei (evtl. beschädigt). Übersprungen.",
+        "err_empty_file": "Leere Datei (0 Byte), vermutlich eine abgebrochene Aufnahme: übersprungen.",
+        "err_card_unresponsive": "Die Karte reagiert nicht mehr. Bitte prüfen (oder anderen Leser probieren) und erneut importieren: Bereits Kopiertes bleibt erhalten.",
         "backup_title": "Backup nach {dest}",
         "backup_queued": "Backup in der Warteschlange: startet, sobald die laufende Kopie fertig ist.",
         "queue_backup_item": "Backup nach {dest}",
@@ -612,6 +615,9 @@ TRANSLATIONS = {
         "cam_preview_loading": "Getting the preview from the camera…",
         "cam_preview_failed": "Could not get the preview from the camera.",
         "cam_view_btn": "View camera files",
+        "err_stalled": "Could not read: no response for this file (it may be damaged). Skipped.",
+        "err_empty_file": "Empty file (0 bytes), probably an interrupted recording: skipped.",
+        "err_card_unresponsive": "The card stopped responding. Check it (or try another reader) and import again: everything already copied is kept.",
         "backup_title": "Backup to {dest}",
         "backup_queued": "Backup queued: it starts when the current copy finishes.",
         "queue_backup_item": "Backup to {dest}",
@@ -906,6 +912,9 @@ TRANSLATIONS = {
         "cam_preview_loading": "Trayendo la vista previa desde la cámara…",
         "cam_preview_failed": "No se pudo traer la vista previa de la cámara.",
         "cam_view_btn": "Ver archivos de la cámara",
+        "err_stalled": "No se pudo leer: no responde con este archivo (puede estar dañado). Se saltó.",
+        "err_empty_file": "Archivo vacío (0 bytes), probablemente una grabación cortada: se omitió.",
+        "err_card_unresponsive": "La tarjeta dejó de responder. Revisala (o probá con otro lector) y volvé a importar: lo ya copiado queda guardado.",
         "backup_title": "Respaldo a {dest}",
         "backup_queued": "Respaldo en cola: empieza cuando termine lo que se está copiando.",
         "queue_backup_item": "Respaldo a {dest}",
@@ -1170,7 +1179,11 @@ def strip_emoji(text):
     if not text:
         return text
     out = _EMOJI_RE.sub("", text)
-    return "\n".join(line.strip() for line in out.split("\n")).strip("\n ") if out != text else text
+    if out == text:
+        return text
+    out = "\n".join(line.strip() for line in out.split("\n")).strip("\n ")
+    # Los sufijos (" ⚠️ 2 errores.") se pegan a otra frase: conservar su espacio inicial.
+    return " " + out if text[:1] == " " and out else out
 
 
 def tr(lang, key, **kwargs):
@@ -3447,7 +3460,68 @@ class _CopyCancelled(Exception):
     pass
 
 
-def copy_file_preserving(src, dst, size=None, progress_cb=None, should_cancel=None, errors_out=None):
+class ReadStalled(TimeoutError):
+    """La lectura no avanzo en el tiempo limite (sector danado, tarjeta trabada)."""
+
+
+def call_with_stall_guard(fn, stall_s=60, should_cancel=None):
+    """Corre fn(beat) en un hilo aparte; fn llama beat() cada vez que avanza.
+    Si pasan stall_s segundos sin avanzar lanza ReadStalled: una lectura de
+    Windows sobre un sector danado puede quedar bloqueada minutos y no se
+    puede interrumpir, asi que ese hilo se abandona y la copia sigue con el
+    proximo archivo. Cancelar tambien responde al instante."""
+    box = {"t": time.monotonic(), "done": False, "res": None, "exc": None}
+
+    def beat():
+        box["t"] = time.monotonic()
+
+    def target():
+        try:
+            box["res"] = fn(beat)
+        except BaseException as e:      # se re-lanza en el hilo que espera
+            box["exc"] = e
+        finally:
+            box["done"] = True
+
+    th = threading.Thread(target=target, daemon=True)
+    th.start()
+    while not box["done"]:
+        th.join(0.2)
+        if box["done"]:
+            break
+        if should_cancel is not None and should_cancel():
+            raise _CopyCancelled()
+        if time.monotonic() - box["t"] > stall_s:
+            raise ReadStalled("stalled")
+    if box["exc"] is not None:
+        raise box["exc"]
+    return box["res"]
+
+
+def copy_file_preserving(src, dst, size=None, progress_cb=None, should_cancel=None, errors_out=None, stall_s=60):
+    """Copia vigilada: si el origen deja de responder (archivo danado en la
+    tarjeta) se abandona ese archivo en vez de colgar toda la copia."""
+    abandon = {"v": False}
+
+    def cancel():
+        return abandon["v"] or (should_cancel is not None and should_cancel())
+    try:
+        return call_with_stall_guard(
+            lambda beat: _copy_file_preserving_impl(src, dst, size, progress_cb, cancel, errors_out, beat),
+            stall_s, should_cancel)
+    except _CopyCancelled:
+        abandon["v"] = True
+        return False
+    except ReadStalled as e:
+        abandon["v"] = True
+        print(f"[Copia] Sin respuesta leyendo {src}: se saltea")
+        if errors_out is not None:
+            errors_out.append(e)
+        return False
+
+
+def _copy_file_preserving_impl(src, dst, size=None, progress_cb=None, should_cancel=None, errors_out=None,
+                               heartbeat=None):
     """Copia por bloques a "<dst>.part" y renombra al final (nunca queda un
     archivo a medias con el nombre definitivo), verifica el tamano y copia
     los atributos: fechas de modificacion/acceso/creacion y flags."""
@@ -3466,6 +3540,8 @@ def copy_file_preserving(src, dst, size=None, progress_cb=None, should_cancel=No
                     break
                 fdst.write(buf)
                 copied += len(buf)
+                if heartbeat is not None:
+                    heartbeat()
                 if progress_cb and size > 0:
                     pct = min(100.0, copied * 100.0 / size)
                     if pct - last_pct >= 0.5:
@@ -3716,6 +3792,8 @@ class SyncWorkerThread(QThread):
         """Motivo entendible para el usuario a partir de la excepcion."""
         winerr = getattr(e, "winerror", None)
         errno_ = getattr(e, "errno", None)
+        if isinstance(e, ReadStalled):
+            return tr(self.lang, "err_stalled")
         if str(e) == "size_mismatch":
             return tr(self.lang, "err_size_mismatch")
         if isinstance(e, FileNotFoundError) or winerr in (2, 3):
@@ -3733,9 +3811,60 @@ class SyncWorkerThread(QThread):
             self.progress.emit(idx, total, name, pct)
         errs = []
         ok = copy_file_preserving(src, dst, size, cb, should_cancel=lambda: self._cancel, errors_out=errs)
+        self._last_stalled = bool(not ok and errs and isinstance(errs[-1], ReadStalled))
         if not ok and errs:
             self._err(name, self._reason_from_exception(errs[-1]))
         return ok
+
+    def _import_one(self, src, name, size, idx, total, existing_index, cam_folder):
+        """Importa un archivo. Devuelve "ok", "already", "empty", "error" o "cancel"."""
+        for existing_path in existing_candidates(existing_index, name):
+            try:
+                if os.path.getsize(existing_path) == size:
+                    self.progress.emit(idx, total, name, 100.0)
+                    return "already"
+            except Exception:
+                pass
+        if size == 0:
+            # Grabacion cortada (0 bytes): no tiene nada que copiar.
+            self._err(name, tr(self.lang, "err_empty_file"))
+            return "empty"
+
+        dest_dir = self.target_dir
+        if self.sort_into_date_folders:
+            try:
+                # Leer la fecha tambien puede colgarse con un archivo danado.
+                dt = call_with_stall_guard(lambda beat: self._sd_capture_date(src), 30, lambda: self._cancel)
+            except ReadStalled:
+                self._last_stalled = True
+                self._err(name, tr(self.lang, "err_stalled"))
+                return "error"
+            dest_dir = os.path.join(self.target_dir, dt.strftime("%Y-%m-%d"))
+            if cam_folder:
+                dest_dir = os.path.join(dest_dir, cam_folder)
+        try:
+            os.makedirs(dest_dir, exist_ok=True)
+        except Exception:
+            dest_dir = self.target_dir
+
+        dest = os.path.join(dest_dir, name)
+        if os.path.exists(dest) and replaceable_broken_copy(dest, size):
+            print(f"[Sync] Reemplazando copia danada: {dest}")
+        elif os.path.exists(dest):
+            base, ext = os.path.splitext(name)
+            counter = 1
+            while os.path.exists(dest):
+                dest = os.path.join(dest_dir, f"{base}_{counter}{ext}")
+                counter += 1
+
+        ok = self._copy_file_with_progress(src, dest, idx, total, name, size)
+        if self._cancel and not ok:
+            return "cancel"
+        if ok:
+            index_existing(existing_index, os.path.basename(dest), dest)
+            self.progress.emit(idx, total, name, 100.0)
+            return "ok"
+        return "error"
 
     def _sd_capture_date(self, path):
         """Fecha para la carpeta. La GoPro pone la fecha de modificacion del
@@ -3825,56 +3954,38 @@ class SyncWorkerThread(QThread):
         cam_folder = quik_camera_folder(self.target_dir, self.device_name,
                                         [p for paths in existing_index.values() for p in paths])
 
+        stalls = 0
         for idx, (src, name, size) in enumerate(items, start=1):
             if self._cancel:
                 break
             self.progress.emit(idx, total, name, 0.0)
-
-            already = False
-            for existing_path in existing_candidates(existing_index, name):
-                try:
-                    if os.path.getsize(existing_path) == size:
-                        already = True
-                        break
-                except Exception:
-                    pass
-            if already:
-                copied += 1
-                self.progress.emit(idx, total, name, 100.0)
-                if self.delete_after:
-                    to_delete.append(src)
-                continue
-
-            dest_dir = self.target_dir
-            if self.sort_into_date_folders:
-                dest_dir = os.path.join(self.target_dir, self._sd_capture_date(src).strftime("%Y-%m-%d"))
-                if cam_folder:
-                    dest_dir = os.path.join(dest_dir, cam_folder)
             try:
-                os.makedirs(dest_dir, exist_ok=True)
-            except Exception:
-                dest_dir = self.target_dir
-
-            dest = os.path.join(dest_dir, name)
-            if os.path.exists(dest) and replaceable_broken_copy(dest, size):
-                print(f"[Sync] Reemplazando copia danada: {dest}")
-            elif os.path.exists(dest):
-                base, ext = os.path.splitext(name)
-                counter = 1
-                while os.path.exists(dest):
-                    dest = os.path.join(dest_dir, f"{base}_{counter}{ext}")
-                    counter += 1
-
-            ok = self._copy_file_with_progress(src, dest, idx, total, name, size)
-            if self._cancel and not ok:
+                result = self._import_one(src, name, size, idx, total, existing_index, cam_folder)
+            except _CopyCancelled:
                 break
-            if ok:
+            except Exception as e:
+                # Un archivo con problemas no corta la importacion: se anota y se sigue.
+                traceback.print_exc()
+                self._err(name, self._reason_from_exception(e))
+                result = "error"
+            if result == "cancel":
+                break
+            if result in ("ok", "already"):
                 copied += 1
-                index_existing(existing_index, os.path.basename(dest), dest)
-                self.progress.emit(idx, total, name, 100.0)
+                stalls = 0
                 if self.delete_after:
                     to_delete.append(src)
-            else:
+            elif result == "error":
+                errors += 1
+                stalls = stalls + 1 if getattr(self, "_last_stalled", False) else 0
+                self._last_stalled = False
+                if stalls >= 3:
+                    # Tres archivos seguidos sin respuesta: la tarjeta esta trabada.
+                    self.finished_sync.emit(False, tr(self.lang, "err_card_unresponsive"),
+                                            {"total": total, "copied": copied, "deleted": 0, "errors": errors,
+                                             "error_list": list(self.error_list)})
+                    return
+            elif result == "empty":
                 errors += 1
 
         # Borrar de la tarjeta SOLO lo que ya esta copiado y verificado (mismo
@@ -4216,6 +4327,12 @@ class SyncWorkerThread(QThread):
                 except Exception:
                     pass
 
+            if not skip_copy and size == 0:
+                # Archivo vacio en la camara (grabacion cortada): pedirlo por MTP
+                # puede dejar la camara colgada, y no hay nada que copiar.
+                errors += 1
+                self._err(name, tr(self.lang, "err_empty_file"))
+                continue
             if skip_copy:
                 copied += 1
                 self.progress.emit(idx, total, name, 100.0)
