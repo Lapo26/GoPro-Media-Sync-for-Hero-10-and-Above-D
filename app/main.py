@@ -44,7 +44,7 @@ from PySide6.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout, 
                                QGridLayout, QScrollArea, QColorDialog, QGraphicsView, QGraphicsScene, QGraphicsPixmapItem,
                                QSlider, QGraphicsBlurEffect, QMenu, QAbstractButton,
                                QGraphicsOpacityEffect, QLineEdit, QStackedLayout, QListWidget, QDateEdit, QProgressBar, QSystemTrayIcon,
-                               QAbstractScrollArea, QToolTip)
+                               QAbstractScrollArea, QToolTip, QTreeWidget, QTreeWidgetItem, QHeaderView)
 from PySide6.QtGui import (QGuiApplication, QPixmap, QPainter, QColor, QPainterPath, QImage, 
                            QLinearGradient, QFont, QKeySequence, QShortcut, QRegion, QPen, QIcon, QImageReader)
 # Multimedia
@@ -183,6 +183,8 @@ ACTIVE_SOURCE = {"model": None, "sd_root": None}
 LAST_DEVICE_NAME = {"name": None}
 # Activo mientras un SyncWorkerThread esta copiando (pausa las consultas de estado).
 SYNC_IN_PROGRESS = threading.Event()
+# Galeria de la camara abierta: no pedir el estado completo (compite con las miniaturas)
+CAMERA_BROWSING = threading.Event()
 
 def _safe_local_dir():
     """Liefert einen garantiert lokalen, existierenden Ordner (Bilder- oder
@@ -310,6 +312,31 @@ TRANSLATIONS = {
         "ps_start_failed": "Konnte PowerShell nicht starten: {e}",
         "sync_failed_detail": "Sync fehlgeschlagen: {detail}",
         "sd_not_readable": "SD-Karte {root} konnte nicht gelesen werden.",
+        "cam_page_title": "Auf der Kamera",
+        "cam_back": "Zurück",
+        "cam_badge_new": "NEU",
+        "cam_preview_loading": "Vorschau wird von der Kamera geholt…",
+        "cam_preview_failed": "Die Vorschau konnte nicht von der Kamera geholt werden.",
+        "cam_view_btn": "Dateien der Kamera ansehen",
+        "cam_empty_file": "{name}: leere Datei (0 Byte), vermutlich eine abgebrochene Aufnahme",
+        "cam_preview_too_big": "Dieses Video hat {size}: zum Ansehen bitte zuerst synchronisieren.",
+        "cam_not_responding": "Die Kamera reagiert nicht. Bitte ab- und wieder anstecken (oder aus- und einschalten).",
+        "cam_pick_btn": "Dateien auswählen…",
+        "cam_files_title": "Dateien auf der Kamera",
+        "cam_reading": "Kamera wird gelesen…",
+        "cam_col_name": "Datei",
+        "cam_col_date": "Aufnahmedatum",
+        "cam_col_size": "Größe",
+        "cam_col_status": "Status",
+        "cam_status_synced": "Synchronisiert",
+        "cam_status_new": "Neu",
+        "cam_only_new": "Nur neue anzeigen",
+        "cam_select_new": "Neue auswählen",
+        "cam_select_none": "Keine",
+        "cam_summary": "{total} Dateien auf der Kamera · {new} neu",
+        "cam_selection": "{n} ausgewählt · {size}",
+        "cam_sync_selected": "Auswahl synchronisieren",
+        "cam_list_error": "Die Dateiliste der Kamera konnte nicht gelesen werden.",
         "ctx_delete": "Löschen…",
         "delete_title": "Datei löschen",
         "delete_question": "„{name}“ löschen?",
@@ -570,6 +597,31 @@ TRANSLATIONS = {
         "ps_start_failed": "Could not start PowerShell: {e}",
         "sync_failed_detail": "Sync failed: {detail}",
         "sd_not_readable": "Could not read SD card {root}.",
+        "cam_page_title": "On the camera",
+        "cam_back": "Back",
+        "cam_badge_new": "NEW",
+        "cam_preview_loading": "Getting the preview from the camera…",
+        "cam_preview_failed": "Could not get the preview from the camera.",
+        "cam_view_btn": "View camera files",
+        "cam_empty_file": "{name}: empty file (0 bytes), probably an interrupted recording",
+        "cam_preview_too_big": "This video is {size}: sync it first to watch it.",
+        "cam_not_responding": "The camera is not responding. Unplug it and plug it back in (or turn it off and on).",
+        "cam_pick_btn": "Choose files…",
+        "cam_files_title": "Files on the camera",
+        "cam_reading": "Reading the camera…",
+        "cam_col_name": "File",
+        "cam_col_date": "Date taken",
+        "cam_col_size": "Size",
+        "cam_col_status": "Status",
+        "cam_status_synced": "Synced",
+        "cam_status_new": "New",
+        "cam_only_new": "Show only new files",
+        "cam_select_new": "Select new",
+        "cam_select_none": "None",
+        "cam_summary": "{total} files on the camera · {new} new",
+        "cam_selection": "{n} selected · {size}",
+        "cam_sync_selected": "Sync selected",
+        "cam_list_error": "Could not read the camera's file list.",
         "ctx_delete": "Delete…",
         "delete_title": "Delete file",
         "delete_question": "Delete “{name}”?",
@@ -830,6 +882,31 @@ TRANSLATIONS = {
         "ps_start_failed": "No se pudo iniciar PowerShell: {e}",
         "sync_failed_detail": "Falló la sincronización: {detail}",
         "sd_not_readable": "No se pudo leer la tarjeta SD {root}.",
+        "cam_page_title": "En la cámara",
+        "cam_back": "Volver",
+        "cam_badge_new": "NUEVO",
+        "cam_preview_loading": "Trayendo la vista previa desde la cámara…",
+        "cam_preview_failed": "No se pudo traer la vista previa de la cámara.",
+        "cam_view_btn": "Ver archivos de la cámara",
+        "cam_empty_file": "{name}: archivo vacío (0 bytes), probablemente una grabación que se cortó",
+        "cam_preview_too_big": "Este video pesa {size}: para verlo, sincronizalo primero.",
+        "cam_not_responding": "La cámara no responde. Desconectala y volvé a conectarla (o apagala y prendela).",
+        "cam_pick_btn": "Elegir archivos…",
+        "cam_files_title": "Archivos en la cámara",
+        "cam_reading": "Leyendo la cámara…",
+        "cam_col_name": "Archivo",
+        "cam_col_date": "Fecha de captura",
+        "cam_col_size": "Tamaño",
+        "cam_col_status": "Estado",
+        "cam_status_synced": "Sincronizado",
+        "cam_status_new": "Nuevo",
+        "cam_only_new": "Mostrar solo los nuevos",
+        "cam_select_new": "Seleccionar nuevos",
+        "cam_select_none": "Ninguno",
+        "cam_summary": "{total} archivos en la cámara · {new} nuevos",
+        "cam_selection": "{n} seleccionados · {size}",
+        "cam_sync_selected": "Sincronizar seleccionados",
+        "cam_list_error": "No se pudo leer la lista de archivos de la cámara.",
         "ctx_delete": "Eliminar…",
         "delete_title": "Eliminar archivo",
         "delete_question": "¿Eliminar «{name}»?",
@@ -2602,7 +2679,7 @@ class DeviceMonitorThread(QThread):
                 if connected:
                     if self._running: self.status_ready.emit(read_gopro_status(model=model, sd_root=sd_root))
                     cycle = 0
-            elif connected and not SYNC_IN_PROGRESS.is_set():
+            elif connected and not SYNC_IN_PROGRESS.is_set() and not CAMERA_BROWSING.is_set():
                 # Antes cada ~4 s: un PowerShell que recorre cientos de
                 # columnas MTP. El espacio libre no cambia tan rapido, y
                 # durante una sincronizacion solo competiria con la copia.
@@ -3509,8 +3586,11 @@ class SyncWorkerThread(QThread):
     plan = Signal(object)        # lista con el tamano de cada archivo (para el progreso total)
 
     def __init__(self, target_dir, delete_after, sync_mode="all", lang="de", sort_into_date_folders=True, parent=None,
-                 import_dir=None):
+                 import_dir=None, only_keys=None):
         super().__init__(parent)
+        # Sincronizar solo estos archivos de la camara ("carpeta|nombre"), elegidos
+        # en "Elegir archivos..."; None = todos.
+        self.only_keys = set(only_keys) if only_keys else None
         self.target_dir = target_dir
         self.delete_after = delete_after
         self.sync_mode = sync_mode if sync_mode in MEDIA_EXTENSIONS_BY_MODE else "all"
@@ -3975,6 +4055,8 @@ class SyncWorkerThread(QThread):
             items = [payload]
         else:
             items = payload or []
+        if self.only_keys is not None:
+            items = [e for e in items if camera_item_key(e) in self.only_keys]
 
         total = len(items)
 
@@ -5744,6 +5826,7 @@ class ThumbGridView(QAbstractScrollArea):
     visible. Senales: activated(ruta) con clic izquierdo, context(ruta, pos)."""
     activated = Signal(str)
     context = Signal(str, QPoint)
+    selection_changed = Signal()
     SP, HEADER_H = 18, 40
     ROW_H = THUMB_H + 18
     LRU_CAP = 240
@@ -5765,6 +5848,13 @@ class ThumbGridView(QAbstractScrollArea):
         self.provider = None
         self.hover = None
         self._press = None
+        # Galeria de la camara: estado por elemento ("synced"/"new"), seleccion
+        # con un circulo en la esquina y textos de ayuda propios.
+        self.status = {}
+        self.selectable = False
+        self.selected = set()
+        self.tooltips = {}
+        self.accent = QColor("#00f2fe")
         self.header_font = QFont("Century Gothic")
         self.header_font.setPixelSize(13)
         self.header_font.setBold(True)
@@ -5808,15 +5898,22 @@ class ThumbGridView(QAbstractScrollArea):
             self._shimmer_timer.start()
 
     # ---- datos
-    def set_items(self, files, dates, meta, kind, lang):
-        if self.provider is not None:
+    def set_items(self, files, dates, meta, kind, lang, provider=None, keep_cache=False):
+        if self.provider is not None and self.provider is not provider:
             self.provider.shutdown()
+            try:
+                self.provider.ready.disconnect(self._on_ready)
+            except Exception:
+                pass
+        same = provider is not None and provider is self.provider
         self.files, self.dates, self.lang = files, dates, lang
-        self.lru.clear()
-        self.missing.clear()
+        if not keep_cache:
+            self.lru.clear()
+            self.missing.clear()
         self.hover = None
-        self.provider = ThumbProvider(kind, meta, lang, self)
-        self.provider.ready.connect(self._on_ready)
+        if not same:
+            self.provider = provider or ThumbProvider(kind, meta, lang, self)
+            self.provider.ready.connect(self._on_ready)
         self.verticalScrollBar().setValue(0)
         self._relayout()
 
@@ -5958,9 +6055,85 @@ class ThumbGridView(QAbstractScrollArea):
                 else:
                     painter.drawPixmap(int(r.x()), int(r.y()), pix)   # ya viene redondeada y a la escala real
                 hovered = path == self.hover
-                painter.setPen(QPen(QColor(255, 255, 255, 220 if hovered else 22), 2 if hovered else 1))
+                sel = self.selectable and path in self.selected
+                if sel:
+                    painter.setPen(QPen(self.accent, 3))
+                else:
+                    painter.setPen(QPen(QColor(255, 255, 255, 220 if hovered else 22), 2 if hovered else 1))
                 painter.drawPath(clip)
+                st = self.status.get(path)
+                if st:
+                    self._paint_badge(painter, r, st)
+                if self.selectable:
+                    self._paint_check(painter, r, sel, hovered)
         painter.end()
+
+    def _paint_badge(self, painter, r, status):
+        """Marca de estado: check verde = ya sincronizado; NUEVO = falta copiar."""
+        if status == "synced":
+            c = QPointF(r.right() - 18, r.top() + 18)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor(0, 0, 0, 110))
+            painter.drawEllipse(c, 13, 13)
+            painter.setBrush(QColor("#2ecc71"))
+            painter.drawEllipse(c, 11, 11)
+            pen = QPen(QColor("#ffffff"), 2.4)
+            pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+            pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+            painter.setPen(pen)
+            path = QPainterPath(QPointF(c.x() - 5, c.y()))
+            path.lineTo(c.x() - 1.5, c.y() + 3.5)
+            path.lineTo(c.x() + 5, c.y() - 4)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawPath(path)
+        else:
+            text = tr(self.lang, "cam_badge_new")
+            f = QFont(self.header_font)
+            f.setPixelSize(11)
+            painter.setFont(f)
+            w = painter.fontMetrics().horizontalAdvance(text) + 16
+            pill = QRectF(r.right() - w - 8, r.top() + 8, w, 20)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(self.accent)
+            painter.drawRoundedRect(pill, 10, 10)
+            painter.setPen(QColor("#0d0d12"))
+            painter.drawText(pill, Qt.AlignmentFlag.AlignCenter, text)
+
+    def _check_rect(self, r):
+        return QRectF(r.left() + 8, r.top() + 8, 24, 24)
+
+    def _paint_check(self, painter, r, selected, hovered):
+        cr = self._check_rect(r)
+        painter.setPen(QPen(QColor(255, 255, 255, 230 if (selected or hovered) else 150), 2))
+        painter.setBrush(self.accent if selected else QColor(0, 0, 0, 90))
+        painter.drawEllipse(cr)
+        if selected:
+            pen = QPen(QColor("#0d0d12"), 2.4)
+            pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+            painter.setPen(pen)
+            c = cr.center()
+            path = QPainterPath(QPointF(c.x() - 5, c.y()))
+            path.lineTo(c.x() - 1.5, c.y() + 3.5)
+            path.lineTo(c.x() + 5, c.y() - 4)
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawPath(path)
+
+    def _cell_rect(self, path):
+        off = self.verticalScrollBar().value()
+        x0 = self._x0()
+        for y, kind, payload in self._visible_rows():
+            if kind == "t" and path in payload:
+                c = payload.index(path)
+                return QRectF(x0 + c * (THUMB_W + self.SP), y - off, THUMB_W, THUMB_H)
+        return None
+
+    def toggle_selected(self, path):
+        if path in self.selected:
+            self.selected.discard(path)
+        else:
+            self.selected.add(path)
+        self.viewport().update()
+        self.selection_changed.emit()
 
     # ---- interaccion
     def path_at(self, pos):
@@ -5993,9 +6166,15 @@ class ThumbGridView(QAbstractScrollArea):
 
     def mouseReleaseEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
-            path = self.path_at(event.position().toPoint())
+            pos = event.position().toPoint()
+            path = self.path_at(pos)
             if path and path == self._press:
-                self.activated.emit(path)
+                cell = self._cell_rect(path)
+                ctrl = bool(event.modifiers() & Qt.KeyboardModifier.ControlModifier)
+                if self.selectable and (ctrl or (cell is not None and self._check_rect(cell).contains(QPointF(pos)))):
+                    self.toggle_selected(path)      # circulo de la esquina (o Ctrl+clic): seleccionar
+                else:
+                    self.activated.emit(path)
         self._press = None
         super().mouseReleaseEvent(event)
 
@@ -6008,7 +6187,7 @@ class ThumbGridView(QAbstractScrollArea):
         if event.type() == QEvent.Type.ToolTip:
             path = self.path_at(event.pos())
             if path:
-                QToolTip.showText(event.globalPos(), path, self.viewport())
+                QToolTip.showText(event.globalPos(), self.tooltips.get(path, path), self.viewport())
             else:
                 QToolTip.hideText()
             return True
@@ -6575,6 +6754,7 @@ class SDCardIcon(QWidget):
 
 class SyncTabWidget(QWidget):
     activity_requested = Signal()
+    camera_files_requested = Signal()
     activity_progress = Signal(object)   # % total de la copia en curso, o None si no hay
     folder_changed = Signal(str)
     sync_finished = Signal()
@@ -6823,6 +7003,16 @@ class SyncTabWidget(QWidget):
         self.btn_sync.progress_requested.connect(lambda: self.activity_requested.emit())
         layout.addWidget(self.btn_sync, alignment=Qt.AlignmentFlag.AlignCenter)
 
+        # Ver los archivos de la camara (con su estado) y elegir cuales sincronizar
+        self.btn_pick_files = QPushButton(tr(self.lang, "cam_view_btn"))
+        self.btn_pick_files.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_pick_files.setStyleSheet(
+            "QPushButton { background: transparent; color: rgba(255,255,255,0.7); border: none; font-size: 13px;"
+            " font-weight: 600; padding: 4px; } QPushButton:hover { color: #ffffff; }")
+        self.btn_pick_files.clicked.connect(self.pick_camera_files)
+        self.btn_pick_files.hide()
+        layout.addWidget(self.btn_pick_files, alignment=Qt.AlignmentFlag.AlignCenter)
+
         # Progreso: el panel completo vive en la seccion Actividad; aqui solo
         # un enlace mientras copia / con el ultimo resultado.
         self.progress_panel = SyncProgressPanel(self.lang, self.get_theme_color())
@@ -6972,6 +7162,7 @@ class SyncTabWidget(QWidget):
                 self.title_label.show()
             if not self.btn_sync.is_syncing:
                 self.btn_sync.set_idle(True)
+            self.btn_pick_files.show()
             if not getattr(self, "_has_model_video", True):
                 self.media_stack.setCurrentIndex(3)
                 self.btn_camera_photo.show()
@@ -6998,6 +7189,7 @@ class SyncTabWidget(QWidget):
             self.title_label.show()
             if not self.btn_sync.is_syncing:
                 self.btn_sync.set_idle(False)
+            self.btn_pick_files.hide()
             self.connect_player.stop()
             self.rounded_video.hide_freeze_frame()
             self.media_stack.setCurrentIndex(0)
@@ -7144,12 +7336,16 @@ class SyncTabWidget(QWidget):
         self._open_progress(tr(self.lang, "sync_title_import_from", folder=short_path(folder)))
         self.sync_worker.start()
 
-    def start_sync(self, mode="all"):
+    def pick_camera_files(self):
+        if self.gopro_connected:
+            self.camera_files_requested.emit()
+
+    def start_sync(self, mode="all", only_keys=None):
         if not self.gopro_connected:
             return
         if self._busy():
             # Antes no hacia nada: ahora la sincronizacion de la camara se encola.
-            if self._try_enqueue(("camera", mode)):
+            if self._try_enqueue(("camera", mode, only_keys)):
                 show_toast(self, tr(self.lang, "camera_sync_queued"))
             self.activity_requested.emit()
             return
@@ -7166,7 +7362,7 @@ class SyncTabWidget(QWidget):
         delete_after = self.chk_delete_after.isChecked()
         self.sync_worker = SyncWorkerThread(
             self.sync_target_dir, delete_after, mode, self.lang,
-            self.config.get("sort_into_date_folders", True), self
+            self.config.get("sort_into_date_folders", True), self, only_keys=only_keys
         )
         self.sync_worker.progress.connect(self.on_sync_progress)
         self.sync_worker.finished_sync.connect(self.on_sync_done)
@@ -7214,7 +7410,7 @@ class SyncTabWidget(QWidget):
             if stats.get("copied", 0) > 0:
                 self.sync_finished.emit()
             if task[0] == "camera":
-                QTimer.singleShot(400, lambda: self.start_sync(task[1]))
+                QTimer.singleShot(400, lambda: self.start_sync(task[1], only_keys=task[2] if len(task) > 2 else None))
             else:
                 QTimer.singleShot(400, lambda: self.start_import(task[1], task[2]))
             return
@@ -8721,6 +8917,527 @@ class ActivityPage(QWidget):
         self.history.insertWidget(0, card)
 
 
+def camera_item_key(entry):
+    return f"{entry.get('path') or ''}|{entry.get('name') or ''}"
+
+
+class CameraListThread(QThread):
+    """Lista los archivos de la camara (MTP) en segundo plano."""
+    listed = Signal(object)        # lista de dicts o None si fallo
+
+    def run(self):
+        try:
+            script = build_list_script(MEDIA_EXTENSIONS_BY_MODE["all"])
+            proc = subprocess.run(['powershell', '-NoProfile', '-Command', script], capture_output=True, text=True,
+                                  encoding="utf-8", errors="replace", startupinfo=_hidden_startupinfo(), timeout=120)
+            payload = _extract_result_json(proc.stdout)
+            if isinstance(payload, dict) and "error" in payload:
+                payload = None
+            elif isinstance(payload, dict):
+                payload = [payload]
+            self.listed.emit(payload)
+        except Exception:
+            self.listed.emit(None)
+
+
+class WpdCameraWorker(QThread):
+    """Habla con la camara por WPD (el protocolo MTP) en su propio hilo:
+    miniaturas de los archivos (las da la camara, unos KB, sin copiar nada) y
+    copias puntuales para la vista previa."""
+    thumb_ready = Signal(str, QImage)    # nombre, miniatura (nula si fallo)
+    file_ready = Signal(str, str)        # nombre, ruta local ("" si fallo)
+    names_ready = Signal(object)         # conjunto de nombres de la camara
+    not_responding = Signal()            # la camara dejo de contestar (MTP trabado)
+
+    def __init__(self, name_match="HERO", parent=None):
+        super().__init__(parent)
+        self.name_match = name_match.upper()
+        self._lock = threading.Lock()
+        self._event = threading.Event()
+        self._thumbs = []
+        self._files = []
+        self._stop = False
+        self.objects = {}
+        self._timeouts = 0
+        self.dead = False
+
+    def set_thumb_requests(self, names):
+        with self._lock:
+            self._thumbs = list(names)       # solo lo que se ve AHORA (lo viejo se descarta)
+        self._event.set()
+
+    def add_thumb_request(self, name):
+        with self._lock:
+            if name not in self._thumbs:
+                self._thumbs.append(name)
+        self._event.set()
+
+    def request_file(self, name, dest):
+        with self._lock:
+            self._files.append((name, dest))
+        self._event.set()
+
+    def stop(self):
+        self._stop = True
+        self._event.set()
+
+    def _note_error(self, exc):
+        hr = getattr(exc, "hresult", None) or (exc.args[0] if getattr(exc, "args", None) else None)
+        if hr in (-2147023436, 0x800705B4):       # ERROR_TIMEOUT: la camara no contesta
+            self._timeouts += 1
+            if self._timeouts >= 3 and not self.dead:
+                self.dead = True
+                print("[Camara WPD] la camara no responde")
+                self.not_responding.emit()
+
+    def _open_device(self, comtypes, GUID, POINTER, byref, c_ulong, cast, api, types, mgr, pkey, k_friendly):
+        mgr.RefreshDeviceList()
+        cnt = c_ulong(0)
+        mgr._IPortableDeviceManager__com_GetDevices(None, byref(cnt))
+        arr = (comtypes.c_wchar_p * cnt.value)()
+        mgr._IPortableDeviceManager__com_GetDevices(cast(arr, POINTER(comtypes.c_wchar_p)), byref(cnt))
+        client_fmt = "{204D9F0C-2292-4080-9F42-40664E70F859}"
+        for did in list(arr):
+            d = comtypes.client.CreateObject(GUID("{728a21c5-3d9e-48d7-9810-864848f0f404}"), interface=api.IPortableDevice)
+            cv = comtypes.client.CreateObject(GUID("{0c15d503-d017-47ce-9016-7b3f978721cc}"),
+                                              interface=types.IPortableDeviceValues)
+            cv.SetStringValue(byref(pkey(client_fmt, 2, types)), "GoPro Sync")
+            for pid, val in ((3, 1), (4, 0), (5, 0), (9, 0x80000000)):
+                cv.SetUnsignedIntegerValue(byref(pkey(client_fmt, pid, types)), val)
+            try:
+                d.Open(did, cv)
+                name = d.Content().Properties().GetValues("DEVICE", None).GetStringValue(byref(k_friendly))
+            except Exception:
+                continue
+            if self.name_match in (name or "").upper():
+                return d
+            d.Close()
+        return None
+
+    def run(self):
+        try:
+            import comtypes
+            import comtypes.client
+            from comtypes import GUID
+            from ctypes import POINTER, byref, c_ulong, cast
+        except Exception as e:
+            print("[Camara WPD] falta comtypes:", e)
+            return
+        comtypes.CoInitialize()
+        dev = None
+        try:
+            api, types = _wpd_modules()
+
+            def pkey(fmt, pid, lib=None):
+                k = (lib or api)._tagpropertykey()
+                k.fmtid = GUID(fmt)
+                k.pid = pid
+                return k
+            k_friendly = pkey("{26D4979A-E643-4626-9E2B-736DC0C92FDC}", 12)
+            k_name = pkey("{EF6B490D-5CD8-437A-AFFC-DA8B60EE4A3C}", 12)
+            k_thumb = pkey("{C7C407BA-98FA-46B5-9960-23FEC124CFDE}", 0)
+            k_data = pkey("{E81E79BE-34F0-41BF-B53F-F1A06AE87842}", 0)
+            mgr = comtypes.client.CreateObject(GUID("{0af10cec-2ecd-4b92-9581-34f6ae0637f3}"),
+                                               interface=api.IPortableDeviceManager)
+            for attempt in range(6):          # la camara puede estar ocupada un momento
+                if self._stop:
+                    return
+                dev = self._open_device(comtypes, GUID, POINTER, byref, c_ulong, cast, api, types, mgr, pkey, k_friendly)
+                if dev is not None:
+                    break
+                time.sleep(1.0)
+            if dev is None:
+                print("[Camara WPD] no se pudo abrir la camara")
+                return
+            content = dev.Content()
+            props = content.Properties()
+            res = content.Transfer()
+
+            def children(oid):
+                out = []
+                enum = content.EnumObjects(0, oid, None)
+                while True:
+                    ids = (comtypes.c_wchar_p * 64)()
+                    fetched = c_ulong(0)
+                    enum._IEnumPortableDeviceObjectIDs__com_Next(64, cast(ids, POINTER(comtypes.c_wchar_p)), byref(fetched))
+                    if not fetched.value:
+                        break
+                    out += [ids[i] for i in range(fetched.value)]
+                return out
+
+            for attempt in range(8):          # recien conectada contesta "ocupada" un rato
+                try:
+                    found = {}
+                    stack = ["DEVICE"]
+                    while stack and not self._stop:
+                        oid = stack.pop()
+                        for c in children(oid):
+                            try:
+                                n = props.GetValues(c, None).GetStringValue(byref(k_name)) or ""
+                            except Exception:
+                                n = ""
+                            if "." in n:
+                                found[n.upper()] = c
+                            else:
+                                stack.append(c)
+                    self.objects = found
+                    break
+                except Exception as e:
+                    if self._stop or attempt == 7:
+                        raise
+                    print("[Camara WPD] ocupada, reintento:", e)
+                    time.sleep(3.0)
+            self.names_ready.emit(set(self.objects))
+
+            def read_stream(oid, key, chunk):
+                r = res.GetStream(oid, byref(key), 0, 0)
+                cand = list(r) if isinstance(r, (list, tuple)) else [r]
+                st = next((x for x in cand if hasattr(x, "RemoteRead")), None)
+                if st is None:
+                    raise RuntimeError("sin stream")
+                while True:
+                    buf, got = st.RemoteRead(chunk)
+                    if not got:
+                        break
+                    yield bytes(buf[:got])
+
+            while not self._stop:
+                self._event.wait(0.5)
+                self._event.clear()
+                while not self._stop:
+                    with self._lock:
+                        job = ("file",) + self._files.pop(0) if self._files else (
+                            ("thumb", self._thumbs.pop(0)) if self._thumbs else None)
+                    if job is None:
+                        break
+                    if self.dead:                 # no insistir: cada intento tarda 3 s
+                        if job[0] == "file":
+                            self.file_ready.emit(job[1], "")
+                        else:
+                            self.thumb_ready.emit(job[1], QImage())
+                        continue
+                    if job[0] == "file":
+                        name, dest = job[1], job[2]
+                        oid = self.objects.get(name.upper())
+                        try:
+                            if oid is None:
+                                raise RuntimeError("no esta en la camara")
+                            with open(dest + ".part", "wb") as f:
+                                # sin cortar a mitad: una lectura MTP abandonada traba la camara
+                                for blk in read_stream(oid, k_data, 1024 * 1024):
+                                    f.write(blk)
+                            os.replace(dest + ".part", dest)
+                            self._timeouts = 0
+                            self.file_ready.emit(name, dest)
+                        except Exception as e:
+                            self._note_error(e)
+                            try:
+                                os.remove(dest + ".part")
+                            except OSError:
+                                pass
+                            self.file_ready.emit(name, "")
+                    else:
+                        name = job[1]
+                        oid = self.objects.get(name.upper())
+                        img = QImage()
+                        if oid is not None:
+                            try:
+                                img = QImage.fromData(b"".join(read_stream(oid, k_thumb, 65536)))
+                                self._timeouts = 0
+                            except Exception as e:
+                                self._note_error(e)
+                                img = QImage()
+                        self.thumb_ready.emit(name, img)
+        except Exception as e:
+            print("[Camara WPD]", e)
+        finally:
+            try:
+                if dev is not None:
+                    dev.Close()
+            except Exception:
+                pass
+            try:
+                comtypes.CoUninitialize()
+            except Exception:
+                pass
+
+
+class CameraThumbAdapter(QObject):
+    """Proveedor de miniaturas para la galeria de la camara: las ya
+    sincronizadas salen de la cache local (nitidas); las nuevas, de la camara."""
+    ready = Signal(str, QImage)
+
+    def __init__(self, info, worker, lang, parent=None):
+        super().__init__(parent)
+        from concurrent.futures import ThreadPoolExecutor
+        self.info = info                  # clave -> {"name", "local", "video"}
+        self.worker = worker
+        self.lang = lang
+        self.generation = 0
+        self.inflight = set()
+        self.pool = ThreadPoolExecutor(max_workers=3)
+        self.dpr = screen_dpr()
+        self.by_name = {}
+        for key, inf in info.items():
+            self.by_name.setdefault(inf["name"].upper(), []).append(key)
+        worker.thumb_ready.connect(self._on_camera_thumb)
+
+    def _cover(self, img, video):
+        cover = make_cover_thumbnail(img, THUMB_W, THUMB_H, dpr=self.dpr)
+        return draw_play_badge(cover) if video else cover
+
+    def request(self, keys):
+        camera_names = []
+        for key in keys:
+            inf = self.info.get(key)
+            if inf is None or key in self.inflight:
+                continue
+            self.inflight.add(key)
+            if inf["size"] == 0:
+                # archivo vacio (grabacion cortada): no pedirle nada a la camara,
+                # leer 0 bytes por MTP puede dejarla colgada
+                io = _ThumbIO("video" if inf["video"] else "picture", {}, self.lang)
+                self.ready.emit(key, self._cover(io._damaged_image(), False))
+            elif inf["local"]:
+                self.pool.submit(self._load_local, key, inf)
+            else:
+                camera_names.append(inf["name"])
+        self.worker.set_thumb_requests(camera_names)
+
+    def _load_local(self, key, inf):
+        io = _ThumbIO("video" if inf["video"] else "picture", {}, self.lang)
+        img = io._load_cached(inf["local"])
+        if img is None or img.isNull():
+            # no hay miniatura en cache: pedirsela a la camara
+            self.worker.add_thumb_request(inf["name"])
+            return
+        self.ready.emit(key, self._cover(img, inf["video"]))
+
+    def _on_camera_thumb(self, name, img):
+        for key in self.by_name.get(name.upper(), []):
+            inf = self.info[key]
+            self.ready.emit(key, self._cover(img, inf["video"]) if not img.isNull() else QImage())
+
+    def shutdown(self):
+        self.generation += 1
+        try:
+            self.pool.shutdown(wait=False, cancel_futures=True)
+        except Exception:
+            pass
+
+
+class CameraGalleryPage(QWidget):
+    """Galeria de la camara: miniaturas por fecha con marca de sincronizado /
+    nuevo, seleccion de uno o varios y sincronizar solo esos. Clic = vista
+    previa sin sincronizar."""
+    back_requested = Signal()
+    sync_requested = Signal(object)      # lista de claves "carpeta|nombre"
+    PREVIEW_VIDEO_MAX = 300 * 1024 * 1024
+
+    def __init__(self, lang, accent, get_target_dir, parent=None):
+        super().__init__(parent)
+        self.lang, self.accent, self.get_target_dir = lang, accent, get_target_dir
+        self.worker = None
+        self.lister = None
+        self.info = {}
+        self.all_keys = []
+        self._pending_preview = {}
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(32, 24, 32, 20)
+        outer.setSpacing(12)
+        btn_css = ("QPushButton { background-color: rgba(255,255,255,0.07); border: 1px solid rgba(255,255,255,0.14);"
+                   " border-radius: 10px; padding: 8px 16px; color: rgba(255,255,255,0.85); font-size: 13px; font-weight: 600; }"
+                   " QPushButton:hover { background-color: rgba(255,255,255,0.12); }")
+        head = QHBoxLayout()
+        self.btn_back = QPushButton(tr(lang, "cam_back"))
+        self.btn_back.setStyleSheet(btn_css)
+        self.btn_back.clicked.connect(self.close_page)
+        self.title_lbl = QLabel(tr(lang, "cam_page_title"))
+        self.title_lbl.setStyleSheet("font-size: 24px; font-weight: 800; color: #ffffff; background: transparent;")
+        head.addWidget(self.btn_back)
+        head.addSpacing(10)
+        head.addWidget(self.title_lbl)
+        head.addStretch()
+        self.btn_sel_new = QPushButton(tr(lang, "cam_select_new"))
+        self.btn_sel_none = QPushButton(tr(lang, "cam_select_none"))
+        for b in (self.btn_sel_new, self.btn_sel_none):
+            b.setStyleSheet(btn_css)
+            head.addWidget(b)
+        self.btn_sel_new.clicked.connect(lambda: self._select(lambda k: not self.info[k]["local"] and self.info[k]["size"] > 0))
+        self.btn_sel_none.clicked.connect(lambda: self._select(lambda k: False))
+        outer.addLayout(head)
+        row = QHBoxLayout()
+        self.lbl_summary = QLabel("")
+        self.lbl_summary.setStyleSheet("font-size: 13px; color: rgba(255,255,255,0.6); background: transparent;")
+        self.chk_only_new = ToggleSwitch(tr(lang, "cam_only_new"))
+        self.chk_only_new.set_accent(accent)
+        self.chk_only_new.toggled.connect(lambda _s: self._apply_filter())
+        row.addWidget(self.lbl_summary)
+        row.addStretch()
+        row.addWidget(self.chk_only_new)
+        outer.addLayout(row)
+        self.view = ThumbGridView(self)
+        self.view.accent = QColor(accent)
+        self.view.selectable = True
+        self.view.activated.connect(self._preview)
+        self.view.selection_changed.connect(self._update_footer)
+        outer.addWidget(self.view, 1)
+        foot = QHBoxLayout()
+        self.lbl_sel = QLabel("")
+        self.lbl_sel.setStyleSheet(f"font-size: 13px; color: {accent}; background: transparent;")
+        self.btn_sync = QPushButton(tr(lang, "cam_sync_selected"))
+        self.btn_sync.setStyleSheet(
+            f"QPushButton {{ background: {accent}; color: #0d0d12; border: none; border-radius: 10px; padding: 10px 20px;"
+            f" font-weight: 800; font-size: 13px; }} QPushButton:disabled {{ background: rgba(255,255,255,0.12);"
+            f" color: rgba(255,255,255,0.4); }}")
+        self.btn_sync.setEnabled(False)
+        self.btn_sync.clicked.connect(self._sync_selected)
+        foot.addWidget(self.lbl_sel)
+        foot.addStretch()
+        foot.addWidget(self.btn_sync)
+        outer.addLayout(foot)
+
+    # ---- abrir / cerrar
+    def open_page(self, device_name=""):
+        self.close_workers()
+        self.title_lbl.setText(tr(self.lang, "cam_page_title") + (f" · {device_name}" if device_name else ""))
+        self.lbl_summary.setText(tr(self.lang, "cam_reading"))
+        self.view.selected.clear()
+        self.view.status = {}
+        self.view.set_items([], [], {}, "picture", self.lang)
+        self._update_footer()
+        CAMERA_BROWSING.set()
+        self.worker = WpdCameraWorker("HERO", self)
+        self.worker.file_ready.connect(self._on_preview_file)
+        self.worker.not_responding.connect(lambda: show_toast(self, tr(self.lang, "cam_not_responding")))
+        self.lister = CameraListThread(self)
+        self.lister.listed.connect(self._on_listed)
+        self.lister.start()
+
+    def close_workers(self):
+        CAMERA_BROWSING.clear()
+        if self.worker is not None:
+            self.worker.stop()
+            self.worker.wait(3000)
+            self.worker = None
+
+    def close_page(self):
+        self.close_workers()
+        self.back_requested.emit()
+
+    # ---- datos
+    def _on_listed(self, items):
+        if items is None:
+            self.lbl_summary.setText(tr(self.lang, "cam_list_error"))
+            return
+        index = {}
+        try:
+            for root, _d, names in os.walk(self.get_target_dir()):
+                for n in names:
+                    full = os.path.join(root, n)
+                    try:
+                        index_existing(index, n, (os.path.getsize(full), full))
+                    except OSError:
+                        pass
+        except Exception:
+            pass
+        info, entries = {}, []
+        for e in items:
+            name, size = e.get("name") or "", int(e.get("size") or 0)
+            key = camera_item_key(e)
+            local = next((pth for sz, pth in existing_candidates(index, name) if sz == size), None)
+            dt = _parse_camera_dt(e.get("dt"))
+            info[key] = {"name": name, "size": size, "local": local, "video": name.lower().endswith(".mp4"), "dt": dt}
+            entries.append((dt.timestamp() if dt else 0.0, key))
+        entries.sort(reverse=True)
+        self.info = info
+        self.all_keys = [k for _t, k in entries]
+        self.view.status = {k: ("synced" if info[k]["local"] else "new") for k in self.all_keys}
+        self.view.tooltips = {k: ((info[k]["local"] or info[k]["name"]) + "  ·  " + _human_size(info[k]["size"])
+                                  + ("  ·  " + tr(self.lang, "cam_empty_file", name="").strip(" :") if info[k]["size"] == 0 else ""))
+                              for k in self.all_keys}
+        self.provider = CameraThumbAdapter(info, self.worker, self.lang, self)
+        if self.worker is not None and not self.worker.isRunning():
+            self.worker.start()           # despues del listado: no pelean por la camara
+        new = sum(1 for k in self.all_keys if not info[k]["local"])
+        self.lbl_summary.setText(tr(self.lang, "cam_summary", total=len(self.all_keys), new=new))
+        self._apply_filter(first=True)
+
+    def _apply_filter(self, first=False):
+        if not self.info:
+            return
+        keys = [k for k in self.all_keys if not (self.chk_only_new.isChecked() and self.info[k]["local"])]
+        dates = [self.info[k]["dt"].strftime("%Y-%m-%d") if self.info[k]["dt"] else "0000-00-00" for k in keys]
+        self.view.set_items(keys, dates, {}, "picture", self.lang, provider=self.provider, keep_cache=not first)
+        self._update_footer()
+
+    def _select(self, pred):
+        self.view.selected = {k for k in self.view.files if pred(k)}
+        self.view.viewport().update()
+        self._update_footer()
+
+    def _update_footer(self):
+        sel = [k for k in self.view.selected if k in self.info]
+        total = sum(self.info[k]["size"] for k in sel)
+        self.lbl_sel.setText(tr(self.lang, "cam_selection", n=len(sel), size=_human_size(total)) if self.info else "")
+        self.btn_sync.setEnabled(bool(sel))
+
+    def _sync_selected(self):
+        keys = [k for k in self.all_keys if k in self.view.selected]
+        if keys:
+            self.close_workers()
+            self.sync_requested.emit(keys)
+
+    # ---- vista previa (sin sincronizar)
+    def _preview(self, key):
+        inf = self.info.get(key)
+        if not inf:
+            return
+        if inf["size"] == 0:
+            show_toast(self, tr(self.lang, "cam_empty_file", name=inf["name"]))
+            return
+        if inf["local"]:
+            return self._open_viewer(inf["local"], inf["video"])
+        name = inf["name"]
+        if inf["video"]:
+            base = os.path.splitext(name)[0].upper()
+            lrv = ("GL" + base[2:] if base.startswith("GP") else base) + ".LRV"
+            if self.worker is not None and lrv in self.worker.objects:
+                name = lrv                       # version liviana del video (si la camara la muestra)
+            elif inf["size"] > self.PREVIEW_VIDEO_MAX:
+                show_toast(self, tr(self.lang, "cam_preview_too_big", size=_human_size(inf["size"])))
+                return
+        if self.worker is not None and self.worker.dead:
+            show_toast(self, tr(self.lang, "cam_not_responding"))
+            return
+        dest_dir = os.path.join(tempfile.gettempdir(), "GoProSync-preview")
+        os.makedirs(dest_dir, exist_ok=True)
+        ext = ".mp4" if inf["video"] else os.path.splitext(name)[1]
+        dest = os.path.join(dest_dir, os.path.splitext(name)[0] + ext)
+        if os.path.exists(dest) and os.path.getsize(dest) > 0:
+            return self._open_viewer(dest, inf["video"])
+        self._pending_preview[name.upper()] = inf["video"]
+        show_toast(self, tr(self.lang, "cam_preview_loading"))
+        if self.worker is not None:
+            self.worker.request_file(name, dest)
+
+    def _on_preview_file(self, name, path):
+        video = self._pending_preview.pop(name.upper(), None)
+        if video is None:
+            return
+        if not path:
+            show_toast(self, tr(self.lang, "cam_preview_failed"))
+            return
+        self._open_viewer(path, video)
+
+    def _open_viewer(self, path, video):
+        SoundManager.play_click()
+        if video:
+            VideoPlayerDialog(path, gallery_dir=self.get_target_dir(), lang=self.lang, parent=self).exec()
+        else:
+            ImageViewerDialog(path, self).exec()
+
+
 class LanguageDialog(QDialog):
     """Se muestra una vez en instalaciones que ya habian hecho el asistente
     antes de que existiera la eleccion de idioma (quedaban en aleman)."""
@@ -9678,6 +10395,18 @@ QDialog QPushButton:!flat {
     border-radius: 10px; padding: 7px 16px; font-weight: 600;
 }
 QDialog QPushButton:hover { background: rgba(255,255,255,0.16); }
+QTreeWidget {
+    background: rgba(255,255,255,0.03); color: #ffffff; border: 1px solid rgba(255,255,255,0.10);
+    border-radius: 10px; alternate-background-color: rgba(255,255,255,0.025); outline: none; font-size: 13px;
+}
+QTreeWidget::item { padding: 4px 2px; border: none; }
+QTreeWidget::item:selected { background: ACCENT_SOFT; color: #ffffff; }
+QTreeWidget::item:hover { background: rgba(255,255,255,0.06); }
+QTreeWidget::indicator { width: 16px; height: 16px; border-radius: 4px; border: 1px solid rgba(255,255,255,0.35); background: rgba(255,255,255,0.05); }
+QTreeWidget::indicator:checked { background: ACCENT; border: 1px solid ACCENT; }
+QHeaderView::section {
+    background: #262a3a; color: rgba(255,255,255,0.7); border: none; padding: 6px 8px; font-weight: 700; font-size: 12px;
+}
 """
 
 
@@ -9899,6 +10628,13 @@ class MainWindow(QWidget):
         self.pages.addWidget(self.videos_page)
         self.pages.addWidget(self.pictures_page)
         self.ACTIVITY_INDEX = self.pages.addWidget(self.sync_page.activity_page)
+        self.camera_page = CameraGalleryPage(self.lang, self.config.get("accent_color", "#00f2fe"),
+                                             lambda: self.sync_page.sync_target_dir)
+        self.CAMERA_INDEX = self.pages.addWidget(self.camera_page)
+        self.sync_page.camera_files_requested.connect(self.show_camera_files)
+        self.camera_page.back_requested.connect(lambda: self.switch_page(0, self.btn_nav_sync))
+        self.camera_page.sync_requested.connect(self._sync_camera_selection)
+        self.sync_page.monitor_thread.connection_changed.connect(self._camera_connection_changed)
         self.sync_page.activity_requested.connect(self.show_activity)
         self.sync_page.monitor_thread.card_detected.connect(
             lambda root: show_toast(self, tr(self.lang, "card_detected", root=root)))
@@ -10251,6 +10987,18 @@ class MainWindow(QWidget):
         self.btn_nav_pictures.setChecked(False)
         self.btn_nav_activity.setChecked(False)
         btn.setChecked(True)
+
+    def show_camera_files(self):
+        self.pages.setCurrentIndex(self.CAMERA_INDEX)
+        self.camera_page.open_page(LAST_DEVICE_NAME.get("name") or "")
+
+    def _sync_camera_selection(self, keys):
+        self.switch_page(0, self.btn_nav_sync)
+        self.sync_page.start_sync("all", only_keys=keys)
+
+    def _camera_connection_changed(self, connected, model):
+        if not connected and self.pages.currentIndex() == self.CAMERA_INDEX:
+            self.camera_page.close_page()
 
     def show_activity(self):
         self.switch_page(self.ACTIVITY_INDEX, self.btn_nav_activity)
