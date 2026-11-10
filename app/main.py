@@ -3598,7 +3598,7 @@ class BackupWorkerThread(QThread):
                 os.makedirs(os.path.dirname(dst), exist_ok=True)
             except Exception as e:
                 errors += 1
-                error_list.append({"name": name, "reason": str(e)})
+                error_list.append((name, str(e)))
                 continue
 
             def cb(pct, idx=idx, total=total, name=name):
@@ -3610,7 +3610,7 @@ class BackupWorkerThread(QThread):
                 self.progress.emit(idx, total, name, 100.0)
             elif not self._cancel:
                 errors += 1
-                error_list.append({"name": name, "reason": str(errs[0]) if errs else tr(self.lang, "err_unknown")})
+                error_list.append((name, str(errs[0]) if errs else tr(self.lang, "err_unknown")))
 
         info = {"copied": copied, "skipped": skipped, "errors": errors, "missing": missing,
                 "error_list": error_list, "total": total}
@@ -7111,6 +7111,11 @@ class SyncTabWidget(QWidget):
         boot_step(55, "boot_activity")
         self.activity_page = ActivityPage(self.lang, self.get_theme_color())
         self.activity_page.set_panel(self.progress_panel)
+        # El respaldo tiene su propio carril: corre en paralelo a la sincronizacion.
+        self.backup_panel = SyncProgressPanel(self.lang, self.get_theme_color())
+        self.backup_panel.cancel_requested.connect(self.cancel_backup)
+        self.backup_panel.hide()
+        self.activity_page.set_panel(self.backup_panel)
         self.activity_page.remove_queued.connect(self.remove_queued)
         self.lnk_activity = QPushButton(tr(self.lang, "activity_view"))
         self.lnk_activity.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -7124,6 +7129,9 @@ class SyncTabWidget(QWidget):
         self._import_queue = []      # tareas en cola: ("import", carpeta, destino) o ("camera", modo)
         self._current_task = None    # la tarea que se esta copiando ahora
         self._current_title = ""
+        self._backup_task = None     # respaldo en curso (carril aparte)
+        self._backup_title = ""
+        self._lane_pct = {"copy": None, "backup": None}
 
         self.sync_popup = QLabel("")
         self.sync_popup.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -7338,8 +7346,33 @@ class SyncTabWidget(QWidget):
         save_config(self.config)
 
     def _busy(self):
-        return any(getattr(self, attr, None) is not None and getattr(self, attr).isRunning()
-                   for attr in ("sync_worker", "backup_worker"))
+        return self._copy_busy() or self._backup_busy()
+
+    def _copy_busy(self):
+        w = getattr(self, "sync_worker", None)
+        return w is not None and w.isRunning()
+
+    def _backup_busy(self):
+        w = getattr(self, "backup_worker", None)
+        return w is not None and w.isRunning()
+
+    @staticmethod
+    def _lane(task):
+        return "backup" if task[0] == "backup" else "copy"
+
+    def _set_lane_pct(self, lane, pct):
+        """Progreso de la barra lateral/barra de tareas: promedio de lo que corre."""
+        self._lane_pct[lane] = pct
+        vals = [v for v in self._lane_pct.values() if v is not None]
+        self.activity_progress.emit(sum(vals) / len(vals) if vals else None)
+
+    def _pop_next(self, lane):
+        for i, t in enumerate(self._import_queue):
+            if self._lane(t) == lane:
+                self._import_queue.pop(i)
+                self._refresh_queue()
+                return t
+        return None
 
     def _queue_labels(self):
         out = []
@@ -7366,7 +7399,7 @@ class SyncTabWidget(QWidget):
     def _try_enqueue(self, task):
         """Agrega a la cola si no es lo mismo que lo que ya se copia o espera."""
         key = self._task_key(task)
-        if self._current_task is not None and self._task_key(self._current_task) == key:
+        if any(cur is not None and self._task_key(cur) == key for cur in (self._current_task, self._backup_task)):
             show_toast(self, tr(self.lang, "queue_running_same"))
             return False
         if any(self._task_key(t) == key for t in self._import_queue):
@@ -7383,14 +7416,16 @@ class SyncTabWidget(QWidget):
             self._refresh_queue()
 
     def _refresh_queue(self):
-        self.progress_panel.set_queue(len(self._import_queue))
+        self.progress_panel.set_queue(sum(1 for t in self._import_queue if self._lane(t) == "copy"))
+        self.backup_panel.set_queue(sum(1 for t in self._import_queue if self._lane(t) == "backup"))
         self.activity_page.set_queue(self._queue_labels())
 
     def _open_progress(self, title):
         self.sync_popup.hide()
         self._current_title = title
-        self.activity_progress.emit(0.0)
-        self.progress_panel.start(title, self.sync_worker, queued=len(self._import_queue))
+        self._set_lane_pct("copy", 0.0)
+        self.progress_panel.start(title, self.sync_worker,
+                                  queued=sum(1 for t in self._import_queue if self._lane(t) == "copy"))
         self.activity_page.set_running(True)
         self.lnk_activity.setText(tr(self.lang, "activity_view"))
         self._refresh_queue()
@@ -7400,10 +7435,18 @@ class SyncTabWidget(QWidget):
         self.progress_panel.show()
 
     def cancel_sync(self):
-        """Cancelar: detiene la copia en curso y vacia la cola de importaciones."""
-        self._import_queue.clear()
+        """Cancelar: detiene la copia en curso y vacia su cola (los respaldos siguen)."""
+        self._import_queue[:] = [t for t in self._import_queue if self._lane(t) != "copy"]
         self._refresh_queue()
         worker = getattr(self, "sync_worker", None)
+        if worker is not None and worker.isRunning():
+            worker.cancel()
+
+    def cancel_backup(self):
+        """Cancelar el respaldo en curso y los respaldos en cola."""
+        self._import_queue[:] = [t for t in self._import_queue if self._lane(t) != "backup"]
+        self._refresh_queue()
+        worker = getattr(self, "backup_worker", None)
         if worker is not None and worker.isRunning():
             worker.cancel()
 
@@ -7412,7 +7455,7 @@ class SyncTabWidget(QWidget):
         tener la camara conectada). 'target' permite otro destino solo para
         esta importacion."""
         target = target or self.sync_target_dir
-        if self._busy():
+        if self._copy_busy():
             # Ya hay algo copiandose: se agrega a la cola y empieza solo al terminar.
             if self._try_enqueue(("import", folder, target)):
                 show_toast(self, tr(self.lang, "import_queued", folder=folder))
@@ -7440,7 +7483,7 @@ class SyncTabWidget(QWidget):
     def start_sync(self, mode="all", only_keys=None):
         if not self.gopro_connected:
             return
-        if self._busy():
+        if self._copy_busy():
             # Antes no hacia nada: ahora la sincronizacion de la camara se encola.
             if self._try_enqueue(("camera", mode, only_keys)):
                 show_toast(self, tr(self.lang, "camera_sync_queued"))
@@ -7474,7 +7517,7 @@ class SyncTabWidget(QWidget):
     def on_sync_progress(self, current, total, name, file_pct):
         if not name.startswith("__CLEANUP__") and self.progress_panel.sizes:
             total_pct = self.progress_panel.total_percent(current, file_pct)
-            self.activity_progress.emit(total_pct)
+            self._set_lane_pct("copy", total_pct)
             if not self._camera_task_running:
                 return   # importando una carpeta: el boton de la camara sigue libre
             # El boton muestra el progreso TOTAL (no el del archivo, que vuelve a 0 con cada uno)
@@ -7490,34 +7533,28 @@ class SyncTabWidget(QWidget):
 
     @Slot(bool, str, dict)
     def on_sync_done(self, success, message, stats):
-        was_backup = bool(self._current_task) and self._current_task[0] == "backup"
         self.btn_sync.set_idle(self.gopro_connected)
         was_camera = self._camera_task_running
         self._camera_task_running = False
         self._current_task = None
-        self.activity_progress.emit(None)
+        self._set_lane_pct("copy", None)
         self.activity_page.add_history(self._current_title, message, stats)
-        self.activity_page.set_running(False)
+        self.activity_page.set_running(self._backup_task is not None)
         self.progress_panel.hide()
         self.lnk_activity.setText(f"{message}   ·   {tr(self.lang, 'activity_view')}")
         self.lnk_activity.setVisible(was_camera)
         # Si hay tareas en cola, sigue con la proxima.
-        if self._import_queue and not stats.get("cancelled"):
-            task = self._import_queue.pop(0)
-            self._refresh_queue()
-            if stats.get("copied", 0) > 0 and not was_backup:
+        task = self._pop_next("copy") if not stats.get("cancelled") else None
+        if task is not None:
+            if stats.get("copied", 0) > 0:
                 self.sync_finished.emit()
             if task[0] == "camera":
                 QTimer.singleShot(400, lambda: self.start_sync(task[1], only_keys=task[2] if len(task) > 2 else None))
-            elif task[0] == "backup":
-                QTimer.singleShot(400, lambda: self.start_backup(task[1], list(task[2])))
             else:
                 QTimer.singleShot(400, lambda: self.start_import(task[1], task[2]))
             return
         if stats.get("copied", 0) > 0:
             SoundManager.play_finish()
-        if was_backup:
-            return            # un respaldo no cambia la biblioteca ni dispara otro respaldo
         self.sync_finished.emit()
         if (stats.get("copied", 0) > 0 and self.config.get("backup_after_sync", True)
                 and self.config.get("backup_dirs")):
@@ -7536,18 +7573,40 @@ class SyncTabWidget(QWidget):
             QTimer.singleShot(5000, self._hide_sync_popup)
             return
         task = ("backup", source, tuple(dests))
-        if self._busy():
+        if self._backup_busy():
             if self._try_enqueue(task):
                 show_toast(self, tr(self.lang, "backup_queued"))
             return
-        self.sync_worker = BackupWorkerThread(source, dests, self.lang, self)
-        self.sync_worker.progress.connect(self.on_sync_progress)
-        self.sync_worker.finished_sync.connect(self.on_sync_done)
-        self._camera_task_running = False
-        self._current_task = task
+        self.backup_worker = BackupWorkerThread(source, dests, self.lang, self)
+        self.backup_worker.progress.connect(self.on_backup_progress)
+        self.backup_worker.finished_sync.connect(self.on_backup_done)
+        self._backup_task = task
         dest_label = short_path(dests[0]) + (f" (+{len(dests) - 1})" if len(dests) > 1 else "")
-        self._open_progress(tr(self.lang, "backup_title", dest=dest_label))
-        self.sync_worker.start()
+        self._backup_title = tr(self.lang, "backup_title", dest=dest_label)
+        self._set_lane_pct("backup", 0.0)
+        self.backup_panel.start(self._backup_title, self.backup_worker,
+                                queued=sum(1 for t in self._import_queue if self._lane(t) == "backup"))
+        self.activity_page.set_running(True)
+        self.backup_worker.start()
+
+    @Slot(int, int, str, float)
+    def on_backup_progress(self, current, total, name, file_pct):
+        if not name.startswith("__CLEANUP__") and self.backup_panel.sizes:
+            self._set_lane_pct("backup", self.backup_panel.total_percent(current, file_pct))
+
+    @Slot(bool, str, dict)
+    def on_backup_done(self, success, message, stats):
+        self._backup_task = None
+        self._set_lane_pct("backup", None)
+        self.activity_page.add_history(self._backup_title, message, stats)
+        self.activity_page.set_running(self._current_task is not None)
+        self.backup_panel.hide()
+        task = self._pop_next("backup") if not stats.get("cancelled") else None
+        if task is not None:
+            QTimer.singleShot(400, lambda: self.start_backup(task[1], list(task[2])))
+            return
+        if stats.get("copied", 0) > 0:
+            SoundManager.play_finish()
 
     def _hide_sync_popup(self):
         busy = any(getattr(self, attr, None) is not None and getattr(self, attr).isRunning()
@@ -8939,6 +8998,14 @@ class ActivityPage(QWidget):
         self.lbl_empty.show()
         self.btn_clear_history.hide()
 
+    def remove_history(self, card):
+        self.history.removeWidget(card)
+        card.deleteLater()
+        left = [self.history.itemAt(i).widget() for i in range(self.history.count())]
+        if not any(w is not None and w is not self.lbl_empty and w is not card for w in left):
+            self.lbl_empty.show()
+            self.btn_clear_history.hide()
+
     def add_history(self, title, message, info):
         self.lbl_empty.hide()
         self.btn_clear_history.show()
@@ -8954,9 +9021,15 @@ class ActivityPage(QWidget):
         t.setStyleSheet("font-size: 13px; font-weight: 800;")
         when = QLabel(datetime.now().strftime("%H:%M"))
         when.setStyleSheet("font-size: 12px; color: rgba(255,255,255,0.5);")
+        btn_del = QPushButton(tr(self.lang, "queue_remove"))
+        btn_del.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_del.setStyleSheet("QPushButton { background: transparent; border: none; color: rgba(255,255,255,0.45);"
+                              " font-size: 12px; padding: 2px 6px; } QPushButton:hover { color: #ff8a8a; }")
+        btn_del.clicked.connect(lambda _=False, c=card: self.remove_history(c))
         head.addWidget(t)
         head.addStretch()
         head.addWidget(when)
+        head.addWidget(btn_del)
         lay.addLayout(head)
         msg = QLabel(message)
         msg.setWordWrap(True)
@@ -11009,14 +11082,21 @@ class MainWindow(QWidget):
         """Respaldar a disco: dialogo con carpeta a respaldar + destino
         (cambiables) y confirmacion; la copia sigue en segundo plano."""
         dirs = list(self.config.get("backup_dirs") or [])
-        dlg = BackupDialog(self, self.lang, self.sync_page.sync_target_dir, dirs[0] if dirs else "",
-                           self.config.get("accent_color", "#00f2fe"))
+        last_src = self.config.get("backup_last_source") or ""
+        source = last_src if last_src and os.path.isdir(last_src) else self.sync_page.sync_target_dir
+        dest = self.config.get("backup_last_dest") or (dirs[0] if dirs else "")
+        dlg = BackupDialog(self, self.lang, source, dest, self.config.get("accent_color", "#00f2fe"),
+                           remember_default=self.config.get("backup_last_remember", True))
         if not dlg.exec() or not dlg.dest:
             return
+        # La proxima vez el dialogo arranca con lo mismo que se eligio ahora.
+        self.config["backup_last_source"] = dlg.source
+        self.config["backup_last_dest"] = dlg.dest
+        self.config["backup_last_remember"] = dlg.remember()
         if dlg.remember() and not any(os.path.normcase(d) == os.path.normcase(dlg.dest) for d in dirs):
             dirs.append(dlg.dest)
             self.config["backup_dirs"] = dirs
-            save_config(self.config)
+        save_config(self.config)
         self.show_activity()
         self.sync_page.start_backup(dlg.source, [dlg.dest])
 
@@ -11446,7 +11526,7 @@ def setup_tray(app, window, lang):
         if pct is None:
             tray.setToolTip("GoPro Sync")
         else:
-            cur = window.sync_page._current_task
+            cur = window.sync_page._current_task or window.sync_page._backup_task
             kind = cur[0] if cur else ""
             task = tr(lang, "busy_syncing" if kind == "camera" else ("busy_backup" if kind == "backup" else "busy_importing"))
             tray.setToolTip(tr(lang, "tray_tooltip_busy", task=task, pct=int(pct)))
