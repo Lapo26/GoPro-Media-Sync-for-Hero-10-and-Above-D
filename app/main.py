@@ -112,7 +112,7 @@ def minimize_own_console():
 
 
 # Version de la app. La actualiza release.ps1 (y el workflow de release al compilar).
-APP_VERSION = "1.3.1"
+APP_VERSION = "1.3.2"
 
 CONFIG_DIR = os.path.join(os.getenv("APPDATA") or os.path.expanduser("~"), "GoProSyncPro")
 CONFIG_FILE = os.path.join(CONFIG_DIR, "sync_config.json")
