@@ -310,6 +310,13 @@ TRANSLATIONS = {
         "ps_start_failed": "Konnte PowerShell nicht starten: {e}",
         "sync_failed_detail": "Sync fehlgeschlagen: {detail}",
         "sd_not_readable": "SD-Karte {root} konnte nicht gelesen werden.",
+        "ctx_delete": "Löschen…",
+        "delete_title": "Datei löschen",
+        "delete_question": "„{name}“ löschen?",
+        "delete_detail": "Sie wird in den Papierkorb verschoben und kann von dort wiederhergestellt werden.",
+        "delete_btn": "Löschen",
+        "deleted_ok": "In den Papierkorb verschoben: {name}",
+        "delete_failed": "{name} konnte nicht gelöscht werden.",
         "tray_open": "GoPro Sync öffnen",
         "tray_quit": "Beenden",
         "tray_hidden_msg": "GoPro Sync läuft neben der Uhr weiter. Zum Beenden: Rechtsklick auf das Symbol → Beenden.",
@@ -563,6 +570,13 @@ TRANSLATIONS = {
         "ps_start_failed": "Could not start PowerShell: {e}",
         "sync_failed_detail": "Sync failed: {detail}",
         "sd_not_readable": "Could not read SD card {root}.",
+        "ctx_delete": "Delete…",
+        "delete_title": "Delete file",
+        "delete_question": "Delete “{name}”?",
+        "delete_detail": "It will be moved to the Recycle Bin, so you can restore it from there.",
+        "delete_btn": "Delete",
+        "deleted_ok": "Moved to the Recycle Bin: {name}",
+        "delete_failed": "Could not delete {name}.",
         "tray_open": "Open GoPro Sync",
         "tray_quit": "Quit",
         "tray_hidden_msg": "GoPro Sync keeps running next to the clock. To quit: right-click the icon → Quit.",
@@ -816,6 +830,13 @@ TRANSLATIONS = {
         "ps_start_failed": "No se pudo iniciar PowerShell: {e}",
         "sync_failed_detail": "Falló la sincronización: {detail}",
         "sd_not_readable": "No se pudo leer la tarjeta SD {root}.",
+        "ctx_delete": "Eliminar…",
+        "delete_title": "Eliminar archivo",
+        "delete_question": "¿Eliminar «{name}»?",
+        "delete_detail": "Se moverá a la Papelera de reciclaje: si te arrepientes, lo recuperas desde ahí.",
+        "delete_btn": "Eliminar",
+        "deleted_ok": "Movido a la Papelera: {name}",
+        "delete_failed": "No se pudo eliminar {name}.",
         "tray_open": "Abrir GoPro Sync",
         "tray_quit": "Salir",
         "tray_hidden_msg": "GoPro Sync sigue funcionando junto al reloj. Para salir: clic derecho en el ícono → Salir.",
@@ -5753,6 +5774,38 @@ class ThumbGridView(QAbstractScrollArea):
         self._req_timer.setSingleShot(True)
         self._req_timer.setInterval(0)
         self._req_timer.timeout.connect(self._request_visible)
+        # Animacion de carga ("shimmer") en los recuadros que esperan miniatura:
+        # 20 cuadros/s, redibuja solo esos recuadros y se apaga sola.
+        self._shimmer_phase = 0.0
+        self._shimmer_timer = QTimer(self)
+        self._shimmer_timer.setInterval(50)
+        self._shimmer_timer.timeout.connect(self._shimmer_tick)
+
+    def _pending_rects(self):
+        off = self.verticalScrollBar().value()
+        x0 = self._x0()
+        rects = []
+        for y, kind, payload in self._visible_rows():
+            if kind != "t":
+                continue
+            for c, path in enumerate(payload):
+                if path not in self.lru and path not in self.missing:
+                    rects.append(QRect(x0 + c * (THUMB_W + self.SP), y - off, THUMB_W, THUMB_H))
+        return rects
+
+    def _shimmer_tick(self):
+        rects = self._pending_rects()
+        if not rects or not self.isVisible():
+            self._shimmer_timer.stop()
+            self.viewport().update()
+            return
+        self._shimmer_phase = (self._shimmer_phase + 0.06) % 1.6
+        for r in rects:
+            self.viewport().update(r)
+
+    def _ensure_shimmer(self):
+        if not self._shimmer_timer.isActive() and self._pending_rects():
+            self._shimmer_timer.start()
 
     # ---- datos
     def set_items(self, files, dates, meta, kind, lang):
@@ -5766,6 +5819,21 @@ class ThumbGridView(QAbstractScrollArea):
         self.provider.ready.connect(self._on_ready)
         self.verticalScrollBar().setValue(0)
         self._relayout()
+
+    def remove_path(self, path):
+        """Quita un archivo de la cuadricula (tras eliminarlo) manteniendo la
+        posicion del scroll."""
+        if path not in self.files:
+            return
+        i = self.files.index(path)
+        del self.files[i]
+        del self.dates[i]
+        self.lru.pop(path, None)
+        if self.hover == path:
+            self.hover = None
+        pos = self.verticalScrollBar().value()
+        self._relayout()
+        self.verticalScrollBar().setValue(min(pos, self.verticalScrollBar().maximum()))
 
     def loaded_count(self):
         return len(self.lru)
@@ -5839,6 +5907,7 @@ class ThumbGridView(QAbstractScrollArea):
                 seen.add(path)
                 want.append(path)
         self.provider.request(want)
+        self._ensure_shimmer()
 
     def _on_ready(self, key, img):
         quick = key.endswith("\0quick")
@@ -5878,6 +5947,14 @@ class ThumbGridView(QAbstractScrollArea):
                 clip.addRoundedRect(r, 12, 12)
                 if pix is None:
                     painter.fillPath(clip, QColor(255, 255, 255, 12))
+                    if path not in self.missing:
+                        # banda de luz que cruza el recuadro mientras carga
+                        cx = r.x() + (self._shimmer_phase - 0.3) * r.width()
+                        g = QLinearGradient(cx - 90, 0, cx + 90, 0)
+                        g.setColorAt(0.0, QColor(255, 255, 255, 0))
+                        g.setColorAt(0.5, QColor(255, 255, 255, 42))
+                        g.setColorAt(1.0, QColor(255, 255, 255, 0))
+                        painter.fillPath(clip, g)
                 else:
                     painter.drawPixmap(int(r.x()), int(r.y()), pix)   # ya viene redondeada y a la escala real
                 hovered = path == self.hover
@@ -6083,7 +6160,22 @@ class GalleryBase(QWidget):
         menu.addAction(tr(self.lang, "ctx_copy_path"), lambda: (QApplication.clipboard().setText(os.path.normpath(path)),
                                                                show_toast(self, tr(self.lang, "path_copied"))))
         menu.addAction(tr(self.lang, "ctx_show_in_explorer"), lambda: show_in_explorer(path))
+        menu.addSeparator()
+        menu.addAction(tr(self.lang, "ctx_delete"), lambda: self.delete_file(path))
         menu.exec(global_pos)
+
+    def delete_file(self, path):
+        """Eliminar con confirmacion: va a la Papelera de reciclaje."""
+        if ConfirmDeleteDialog(self, self.lang, path).exec() != QDialog.DialogCode.Accepted:
+            return
+        name = os.path.basename(path)
+        if move_to_recycle_bin(path):
+            self.view.remove_path(path)
+            if getattr(self, "_all_files", None) and path in self._all_files:
+                self._all_files.remove(path)
+            show_toast(self, tr(self.lang, "deleted_ok", name=name))
+        else:
+            show_toast(self, tr(self.lang, "delete_failed", name=name))
 
     def _relayout_if_needed(self):
         pass   # la vista virtualizada reacomoda sola al redimensionar
@@ -8295,6 +8387,75 @@ def describe_media(path, lang):
         media.append(("", tr(lang, "info_none")))
     rows += [("media", k, v) for k, v in media]
     return rows
+
+
+def move_to_recycle_bin(path):
+    """Mueve un archivo a la Papelera de reciclaje (no lo borra para siempre).
+    Devuelve True si el archivo ya no esta en su lugar."""
+    if os.name != "nt":
+        return False
+    try:
+        from ctypes import wintypes
+
+        class SHFILEOPSTRUCTW(ctypes.Structure):
+            _fields_ = [("hwnd", wintypes.HWND), ("wFunc", wintypes.UINT), ("pFrom", wintypes.LPCWSTR),
+                        ("pTo", wintypes.LPCWSTR), ("fFlags", ctypes.c_ushort), ("fAnyOperationsAborted", wintypes.BOOL),
+                        ("hNameMappings", ctypes.c_void_p), ("lpszProgressTitle", wintypes.LPCWSTR)]
+        FO_DELETE, FOF_SILENT, FOF_NOCONFIRMATION, FOF_ALLOWUNDO, FOF_NOERRORUI = 3, 0x4, 0x10, 0x40, 0x400
+        op = SHFILEOPSTRUCTW()
+        op.wFunc = FO_DELETE
+        op.pFrom = os.path.abspath(path) + "\0"        # lista terminada en doble NUL
+        op.fFlags = FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_SILENT | FOF_NOERRORUI
+        res = ctypes.windll.shell32.SHFileOperationW(ctypes.byref(op))
+        return res == 0 and not op.fAnyOperationsAborted and not os.path.exists(path)
+    except Exception as e:
+        print(f"[Papelera] No se pudo mover {path}: {e}")
+        return False
+
+
+class ConfirmDeleteDialog(QDialog):
+    """Confirmacion antes de eliminar (con el estilo de la app)."""
+
+    def __init__(self, parent, lang, path):
+        super().__init__(parent)
+        self.setWindowTitle(tr(lang, "delete_title"))
+        self.setModal(True)
+        self.setMinimumWidth(460)
+        self.setStyleSheet(
+            f"QDialog {{ background: #1c1e29; }} QLabel {{ color: #fff; background: transparent; }}"
+            f" * {{ font-family: {FONT_STACK}; }}"
+            " QPushButton { background: rgba(255,255,255,0.08); color: #fff; border: 1px solid rgba(255,255,255,0.14);"
+            " border-radius: 10px; padding: 8px 18px; font-weight: 600; }"
+            " QPushButton:hover { background: rgba(255,255,255,0.16); }"
+            " QPushButton#danger { background: #e5484d; border: none; font-weight: 800; }"
+            " QPushButton#danger:hover { background: #f2555a; }")
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(26, 22, 26, 20)
+        lay.setSpacing(10)
+        q = QLabel(tr(lang, "delete_question", name=os.path.basename(path)))
+        q.setWordWrap(True)
+        q.setStyleSheet("font-size: 17px; font-weight: 800;")
+        d = QLabel(tr(lang, "delete_detail"))
+        d.setWordWrap(True)
+        d.setStyleSheet("font-size: 12px; color: rgba(255,255,255,0.65);")
+        where = QLabel(wrap_path(os.path.dirname(path)))
+        where.setWordWrap(True)
+        where.setStyleSheet("font-size: 11px; color: rgba(255,255,255,0.45);")
+        lay.addWidget(q)
+        lay.addWidget(d)
+        lay.addWidget(where)
+        lay.addSpacing(8)
+        row = QHBoxLayout()
+        row.addStretch()
+        cancel = QPushButton(tr(lang, "cancel_btn"))
+        cancel.setDefault(True)               # Enter = cancelar (lo seguro)
+        cancel.clicked.connect(self.reject)
+        ok = QPushButton(tr(lang, "delete_btn"))
+        ok.setObjectName("danger")
+        ok.clicked.connect(self.accept)
+        row.addWidget(cancel)
+        row.addWidget(ok)
+        lay.addLayout(row)
 
 
 def show_in_explorer(path):
