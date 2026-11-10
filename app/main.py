@@ -35,7 +35,7 @@ except ImportError:
     winsound = None
 
 # PySide6
-from PySide6.QtCore import (Qt, QTimer, QThread, Signal, Slot, QRectF, QPointF, QPoint, QRect, QUrl,
+from PySide6.QtCore import (Qt, QTimer, QThread, Signal, Slot, QRectF, QPointF, QPoint, QRect, QUrl, QStandardPaths,
                              QPropertyAnimation, QEasingCurve, Property, QEvent, QObject, QSize,
                              QStandardPaths, QParallelAnimationGroup, QDate)
 from PySide6.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
@@ -45,7 +45,7 @@ from PySide6.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout, 
                                QSlider, QGraphicsBlurEffect, QMenu, QAbstractButton,
                                QGraphicsOpacityEffect, QLineEdit, QStackedLayout, QListWidget, QDateEdit, QProgressBar, QSystemTrayIcon,
                                QAbstractScrollArea, QToolTip, QTreeWidget, QTreeWidgetItem, QHeaderView)
-from PySide6.QtGui import (QGuiApplication, QPixmap, QPainter, QColor, QPainterPath, QImage, 
+from PySide6.QtGui import (QGuiApplication, QDesktopServices, QPixmap, QPainter, QColor, QPainterPath, QImage, 
                            QLinearGradient, QFont, QKeySequence, QShortcut, QRegion, QPen, QIcon, QImageReader)
 # Multimedia
 from PySide6.QtMultimedia import QMediaPlayer, QAudioOutput, QSoundEffect, QVideoSink, QMediaMetaData
@@ -113,6 +113,9 @@ def minimize_own_console():
 
 # Version de la app. La actualiza release.ps1 (y el workflow de release al compilar).
 APP_VERSION = "1.3.2"
+# Repositorio de GitHub de donde salen las versiones (si se renombra, GitHub
+# redirige la API, pero conviene mantener esto al dia).
+GITHUB_REPO = "Lapo26/GoPro-Media-Sync-for-Hero-10-and-Above-D"
 
 CONFIG_DIR = os.path.join(os.getenv("APPDATA") or os.path.expanduser("~"), "GoProSyncPro")
 CONFIG_FILE = os.path.join(CONFIG_DIR, "sync_config.json")
@@ -318,6 +321,38 @@ TRANSLATIONS = {
         "cam_preview_loading": "Vorschau wird von der Kamera geholt…",
         "cam_preview_failed": "Die Vorschau konnte nicht von der Kamera geholt werden.",
         "cam_view_btn": "Dateien der Kamera ansehen",
+        "ctx_light": "Leichte Version zum Teilen erstellen",
+        "ctx_join": "Die {n} Teile dieses Videos zusammenfügen",
+        "light_title": "Leichte Version: {name}",
+        "light_done": "Leichte Version fertig ({size}).",
+        "tools_done": "{ok} von {total} fertig.",
+        "tool_queued": "In der Warteschlange: startet nach dem laufenden Werkzeug.",
+        "ffmpeg_missing": "Die Videokomponente (ffmpeg) fehlt.",
+        "ffmpeg_failed": "Video konnte nicht verarbeitet werden: {e}",
+        "join_btn": "Geteilte Videos zusammenfügen ({n})",
+        "join_title": "Geteilte Videos zusammenfügen",
+        "join_intro": "GoPro teilt lange Aufnahmen in ~4-GB-Teile. Sie werden ohne Neukodierung (gleiche Qualität, mit GPS) zu einem Video neben den Teilen zusammengefügt.",
+        "join_group": "{name}: {n} Teile · {size}",
+        "join_damaged": "{name}: hat einen beschädigten Teil ({part}); bitte zuerst reparieren.",
+        "join_recycle": "Originalteile danach in den Papierkorb verschieben",
+        "join_space": "Es werden {need} freier Speicher benötigt, frei sind {free}.",
+        "join_start": "{n} zusammenfügen",
+        "join_none": "Keine geteilten Videos in der Bibliothek.",
+        "join_task_title": "{n} geteilte Videos zusammenfügen",
+        "join_one_done": "Zusammengefügt: {name}",
+        "join_already": "{name} existiert bereits: übersprungen.",
+        "join_part_missing": "Der erste Teil dieses Videos fehlt.",
+        "update_btn": "Auf {v} aktualisieren",
+        "update_available": "Neue Version von GoPro Sync verfügbar: {v}",
+        "update_title": "GoPro Sync aktualisieren",
+        "update_question": "Version {v} ist verfügbar (du hast {cur}).",
+        "update_detail": "Der Installer ({size}) wird geladen und aktualisiert die App. Einstellungen und Bibliothek bleiben unverändert.",
+        "update_now": "Jetzt aktualisieren",
+        "update_later": "Später",
+        "update_downloading": "Wird geladen… {pct}%",
+        "update_failed": "Update konnte nicht geladen werden: {e}",
+        "update_check_setting": "Beim Start nach Updates suchen",
+        "update_notes": "Neuerungen",
         "sync_already_suffix": " {n} waren schon da.",
         "import_pick_summary": "{total} Dateien · {new} neu",
         "import_pick_btn": "Dateien auswählen…",
@@ -622,6 +657,38 @@ TRANSLATIONS = {
         "cam_preview_loading": "Getting the preview from the camera…",
         "cam_preview_failed": "Could not get the preview from the camera.",
         "cam_view_btn": "View camera files",
+        "ctx_light": "Create a light version to share",
+        "ctx_join": "Join the {n} parts of this video",
+        "light_title": "Light version: {name}",
+        "light_done": "Light version ready ({size}).",
+        "tools_done": "{ok} of {total} done.",
+        "tool_queued": "Queued: it starts when the current tool finishes.",
+        "ffmpeg_missing": "The video component (ffmpeg) is missing.",
+        "ffmpeg_failed": "Could not process the video: {e}",
+        "join_btn": "Join split videos ({n})",
+        "join_title": "Join split videos",
+        "join_intro": "GoPro splits long recordings into ~4 GB parts. They are joined without re-encoding (same quality, GPS kept) into one video next to the parts.",
+        "join_group": "{name}: {n} parts · {size}",
+        "join_damaged": "{name}: has a damaged part ({part}); repair it first.",
+        "join_recycle": "Move the original parts to the Recycle Bin when done",
+        "join_space": "{need} of free disk space is needed and there is {free}.",
+        "join_start": "Join {n}",
+        "join_none": "There are no split videos in the library.",
+        "join_task_title": "Join {n} split videos",
+        "join_one_done": "Joined: {name}",
+        "join_already": "{name} already exists: skipped.",
+        "join_part_missing": "The first part of this video is missing.",
+        "update_btn": "Update to {v}",
+        "update_available": "A new version of GoPro Sync is available: {v}",
+        "update_title": "Update GoPro Sync",
+        "update_question": "Version {v} is available (you have {cur}).",
+        "update_detail": "The installer ({size}) is downloaded and updates the app. Your settings and library are not touched.",
+        "update_now": "Update now",
+        "update_later": "Later",
+        "update_downloading": "Downloading… {pct}%",
+        "update_failed": "Could not download the update: {e}",
+        "update_check_setting": "Check for updates at startup",
+        "update_notes": "What's new",
         "sync_already_suffix": " {n} were already there.",
         "import_pick_summary": "{total} files · {new} new",
         "import_pick_btn": "Choose files…",
@@ -926,6 +993,38 @@ TRANSLATIONS = {
         "cam_preview_loading": "Trayendo la vista previa desde la cámara…",
         "cam_preview_failed": "No se pudo traer la vista previa de la cámara.",
         "cam_view_btn": "Ver archivos de la cámara",
+        "ctx_light": "Crear versión liviana para compartir",
+        "ctx_join": "Unir las {n} partes de este video",
+        "light_title": "Versión liviana: {name}",
+        "light_done": "Lista la versión liviana ({size}).",
+        "tools_done": "{ok} de {total} listos.",
+        "tool_queued": "En cola: empieza cuando termine la herramienta en curso.",
+        "ffmpeg_missing": "Falta el componente de video (ffmpeg).",
+        "ffmpeg_failed": "No se pudo procesar el video: {e}",
+        "join_btn": "Unir videos partidos ({n})",
+        "join_title": "Unir videos partidos",
+        "join_intro": "La GoPro corta las grabaciones largas en partes de ~4 GB. Se unen sin recomprimir (misma calidad, con el GPS) en un solo video junto a las partes.",
+        "join_group": "{name}: {n} partes · {size}",
+        "join_damaged": "{name}: tiene una parte dañada ({part}); reparala primero.",
+        "join_recycle": "Mandar las partes originales a la Papelera al terminar",
+        "join_space": "Hace falta {need} libres en el disco y hay {free}.",
+        "join_start": "Unir {n}",
+        "join_none": "No hay videos partidos en la biblioteca.",
+        "join_task_title": "Unir {n} videos partidos",
+        "join_one_done": "Unido: {name}",
+        "join_already": "Ya existe {name}: se saltó.",
+        "join_part_missing": "Falta la primera parte de este video.",
+        "update_btn": "Actualizar a {v}",
+        "update_available": "Hay una versión nueva de GoPro Sync: {v}",
+        "update_title": "Actualizar GoPro Sync",
+        "update_question": "Versión {v} disponible (tenés la {cur}).",
+        "update_detail": "Se descarga el instalador ({size}) y se actualiza solo. Tu configuración y tu biblioteca no se tocan.",
+        "update_now": "Actualizar ahora",
+        "update_later": "Más tarde",
+        "update_downloading": "Descargando… {pct}%",
+        "update_failed": "No se pudo descargar la actualización: {e}",
+        "update_check_setting": "Buscar actualizaciones al iniciar",
+        "update_notes": "Ver novedades",
         "sync_already_suffix": " {n} ya estaban.",
         "import_pick_summary": "{total} archivos · {new} nuevos",
         "import_pick_btn": "Elegir archivos…",
@@ -3841,7 +3940,10 @@ class SyncWorkerThread(QThread):
 
     @staticmethod
     def _already_there(existing_index, name, size):
-        """Ya hay una copia con el mismo nombre y tamano en el destino."""
+        """Ya hay una copia con el mismo nombre y tamano en el destino (o es
+        una parte que ya se unio en un video completo)."""
+        if f"{name.lower()}|{size}" in JOINED_PARTS:
+            return True
         for existing_path in existing_candidates(existing_index, name):
             try:
                 if os.path.getsize(existing_path) == size:
@@ -6528,6 +6630,7 @@ class GalleryBase(QWidget):
         self._update_sort_button_text()
 
         outer.addLayout(header_row)
+        self.header_row = header_row
 
         self.lbl_loading = QLabel("")
         self.lbl_loading.setStyleSheet("font-size: 12px; color: rgba(255,255,255,0.4); background: transparent;")
@@ -6611,6 +6714,13 @@ class GalleryBase(QWidget):
         menu.addAction(tr(self.lang, "ctx_copy_path"), lambda: (QApplication.clipboard().setText(os.path.normpath(path)),
                                                                show_toast(self, tr(self.lang, "path_copied"))))
         menu.addAction(tr(self.lang, "ctx_show_in_explorer"), lambda: show_in_explorer(path))
+        main = self.window()
+        if self.KIND == "video" and hasattr(main, "make_light_version"):
+            menu.addSeparator()
+            menu.addAction(tr(self.lang, "ctx_light"), lambda: main.make_light_version(path))
+            group = chapter_group_of(path)
+            if group and not group["done"] and not group["damaged"]:
+                menu.addAction(tr(self.lang, "ctx_join", n=len(group["parts"])), lambda: main.join_groups([group]))
         menu.addSeparator()
         menu.addAction(tr(self.lang, "ctx_delete"), lambda: self.delete_file(path))
         menu.exec(global_pos)
@@ -6825,6 +6935,35 @@ class VideoGallery(GalleryBase):
     def __init__(self, folder, lang="de"):
         super().__init__(folder, tr(lang, "video_gallery_title"), "", tr(lang, "no_videos_yet"), lang)
         self._needs_refresh = True   # se carga al abrirla
+        # "Unir videos partidos (N)": aparece si hay partes de la GoPro para unir
+        self.btn_join = QPushButton("")
+        self.btn_join.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_join.setStyleSheet(self.btn_sort.styleSheet())
+        self.btn_join.hide()
+        self.btn_join.clicked.connect(lambda: self.window().open_join_dialog()
+                                      if hasattr(self.window(), "open_join_dialog") else None)
+        self.header_row.insertWidget(self.header_row.indexOf(self.btn_date), self.btn_join)
+
+    def refresh(self, *a, **k):
+        r = super().refresh(*a, **k)
+        self._update_join_button()
+        return r
+
+    def _update_join_button(self):
+        def scan():
+            try:
+                groups = find_chapter_groups(self.folder)
+            except Exception:
+                groups = []
+            return [g for g in groups if not g["done"] and not g["damaged"]]
+        th = ScanThread(0, lambda: scan())
+        th.done.connect(lambda _t, groups: self._show_join(groups))
+        th.start()
+
+    def _show_join(self, groups):
+        n = len(groups or [])
+        self.btn_join.setText(tr(self.lang, "join_btn", n=n))
+        self.btn_join.setVisible(n > 0)
 
     def play_video(self, path):
         SoundManager.play_click()
@@ -7297,6 +7436,11 @@ class SyncTabWidget(QWidget):
         self.backup_panel.cancel_requested.connect(self.cancel_backup)
         self.backup_panel.hide()
         self.activity_page.set_panel(self.backup_panel)
+        # Herramientas (unir partes, version liviana, reparar): otro carril mas.
+        self.tools_panel = SyncProgressPanel(self.lang, self.get_theme_color())
+        self.tools_panel.cancel_requested.connect(self.cancel_tools)
+        self.tools_panel.hide()
+        self.activity_page.set_panel(self.tools_panel)
         self.activity_page.remove_queued.connect(self.remove_queued)
         self.lnk_activity = QPushButton(tr(self.lang, "activity_view"))
         self.lnk_activity.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -7312,7 +7456,9 @@ class SyncTabWidget(QWidget):
         self._current_title = ""
         self._backup_task = None     # respaldo en curso (carril aparte)
         self._backup_title = ""
-        self._lane_pct = {"copy": None, "backup": None}
+        self._tool_task = None       # herramienta en curso (tercer carril)
+        self._tool_title = ""
+        self._lane_pct = {"copy": None, "backup": None, "tool": None}
 
         self.sync_popup = QLabel("")
         self.sync_popup.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -7527,7 +7673,11 @@ class SyncTabWidget(QWidget):
         save_config(self.config)
 
     def _busy(self):
-        return self._copy_busy() or self._backup_busy()
+        return self._copy_busy() or self._backup_busy() or self._tool_busy()
+
+    def _tool_busy(self):
+        w = getattr(self, "tool_worker", None)
+        return w is not None and w.isRunning()
 
     def _copy_busy(self):
         w = getattr(self, "sync_worker", None)
@@ -7539,7 +7689,7 @@ class SyncTabWidget(QWidget):
 
     @staticmethod
     def _lane(task):
-        return "backup" if task[0] == "backup" else "copy"
+        return task[0] if task[0] in ("backup", "tool") else "copy"
 
     def _set_lane_pct(self, lane, pct):
         """Progreso de la barra lateral/barra de tareas: promedio de lo que corre."""
@@ -7564,6 +7714,8 @@ class SyncTabWidget(QWidget):
             elif task[0] == "backup":
                 out.append((tr(self.lang, "queue_backup_item", dest=short_path(task[2][0])),
                             f"{task[1]}  →  {', '.join(task[2])}"))
+            elif task[0] == "tool":
+                out.append((task[1], task[1]))
             else:
                 out.append((tr(self.lang, "queue_import_item", folder=short_path(task[1])), f"{task[1]}  →  {task[2]}"))
         return out
@@ -7572,6 +7724,8 @@ class SyncTabWidget(QWidget):
     def _task_key(task):
         if task[0] == "camera":
             return ("camera",)
+        if task[0] == "tool":
+            return ("tool", task[1])
         if task[0] == "backup":
             return ("backup", os.path.normcase(os.path.abspath(task[1])),
                     tuple(os.path.normcase(os.path.abspath(d)) for d in task[2]))
@@ -7580,7 +7734,8 @@ class SyncTabWidget(QWidget):
     def _try_enqueue(self, task):
         """Agrega a la cola si no es lo mismo que lo que ya se copia o espera."""
         key = self._task_key(task)
-        if any(cur is not None and self._task_key(cur) == key for cur in (self._current_task, self._backup_task)):
+        if any(cur is not None and self._task_key(cur) == key
+               for cur in (self._current_task, self._backup_task, self._tool_task)):
             show_toast(self, tr(self.lang, "queue_running_same"))
             return False
         if any(self._task_key(t) == key for t in self._import_queue):
@@ -7599,6 +7754,7 @@ class SyncTabWidget(QWidget):
     def _refresh_queue(self):
         self.progress_panel.set_queue(sum(1 for t in self._import_queue if self._lane(t) == "copy"))
         self.backup_panel.set_queue(sum(1 for t in self._import_queue if self._lane(t) == "backup"))
+        self.tools_panel.set_queue(sum(1 for t in self._import_queue if self._lane(t) == "tool"))
         self.activity_page.set_queue(self._queue_labels())
 
     def _open_progress(self, title):
@@ -7622,6 +7778,56 @@ class SyncTabWidget(QWidget):
         worker = getattr(self, "sync_worker", None)
         if worker is not None and worker.isRunning():
             worker.cancel()
+
+    def cancel_tools(self):
+        self._import_queue[:] = [t for t in self._import_queue if self._lane(t) != "tool"]
+        self._refresh_queue()
+        worker = getattr(self, "tool_worker", None)
+        if worker is not None and worker.isRunning():
+            worker.cancel()
+
+    def start_tool(self, title, jobs, done_cb=None):
+        """Herramienta en segundo plano (Actividad): progreso, Cancelar y cola."""
+        if not ffmpeg_exe():
+            show_toast(self, tr(self.lang, "ffmpeg_missing"))
+            return
+        task = ("tool", title, jobs, done_cb)
+        if self._tool_busy():
+            if self._try_enqueue(task):
+                show_toast(self, tr(self.lang, "tool_queued"))
+            return
+        self.tool_worker = ToolJobThread(jobs, self.lang, self)
+        self.tool_worker.progress.connect(self.on_tool_progress)
+        self.tool_worker.finished_sync.connect(lambda ok, msg, st, cb=done_cb: self.on_tool_done(ok, msg, st, cb))
+        self._tool_task = task
+        self._tool_title = title
+        self._set_lane_pct("tool", 0.0)
+        self.tools_panel.start(title, self.tool_worker,
+                               queued=sum(1 for t in self._import_queue if self._lane(t) == "tool"))
+        self.activity_page.set_running(True)
+        self.tool_worker.start()
+
+    @Slot(int, int, str, float)
+    def on_tool_progress(self, current, total, name, file_pct):
+        if self.tools_panel.sizes:
+            self._set_lane_pct("tool", self.tools_panel.total_percent(current, file_pct))
+
+    def on_tool_done(self, success, message, stats, done_cb=None):
+        self._tool_task = None
+        self._set_lane_pct("tool", None)
+        self.activity_page.add_history(self._tool_title, message, stats)
+        self.activity_page.set_running(self._current_task is not None or self._backup_task is not None)
+        self.tools_panel.hide()
+        if done_cb:
+            try:
+                done_cb(success, stats)
+            except Exception:
+                traceback.print_exc()
+        task = self._pop_next("tool") if not stats.get("cancelled") else None
+        if task is not None:
+            QTimer.singleShot(400, lambda: self.start_tool(task[1], task[2], task[3]))
+        elif stats.get("copied", 0) > 0:
+            SoundManager.play_finish()
 
     def cancel_backup(self):
         """Cancelar el respaldo en curso y los respaldos en cola."""
@@ -7720,7 +7926,7 @@ class SyncTabWidget(QWidget):
         self._current_task = None
         self._set_lane_pct("copy", None)
         self.activity_page.add_history(self._current_title, message, stats)
-        self.activity_page.set_running(self._backup_task is not None)
+        self.activity_page.set_running(self._backup_task is not None or self._tool_task is not None)
         self.progress_panel.hide()
         self.lnk_activity.setText(f"{message}   ·   {tr(self.lang, 'activity_view')}")
         self.lnk_activity.setVisible(was_camera)
@@ -7780,7 +7986,7 @@ class SyncTabWidget(QWidget):
         self._backup_task = None
         self._set_lane_pct("backup", None)
         self.activity_page.add_history(self._backup_title, message, stats)
-        self.activity_page.set_running(self._current_task is not None)
+        self.activity_page.set_running(self._current_task is not None or self._tool_task is not None)
         self.backup_panel.hide()
         task = self._pop_next("backup") if not stats.get("cancelled") else None
         if task is not None:
@@ -10030,6 +10236,8 @@ class CameraGalleryPage(QWidget):
             name, size = e.get("name") or "", int(e.get("size") or 0)
             key = camera_item_key(e)
             local = next((pth for sz, pth in existing_candidates(index, name) if sz == size), None)
+            if local is None and f"{name.lower()}|{size}" in JOINED_PARTS:
+                local = "(unido)"
             dt = _parse_camera_dt(e.get("dt"))
             info[key] = {"name": name, "size": size, "local": local, "video": name.lower().endswith(".mp4"), "dt": dt}
             entries.append((dt.timestamp() if dt else 0.0, key))
@@ -10774,6 +10982,12 @@ class SettingsDialog(QDialog):
         backup_hint.setStyleSheet("color: #777; font-size: 11px;")
         backup_hint.setWordWrap(True)
         folder_layout.addWidget(backup_hint)
+        self.chk_check_updates = ToggleSwitch(tr(self.lang, "update_check_setting"))
+        self.chk_check_updates.set_accent(self.config.get("accent_color", "#00f2fe"))
+        self.chk_check_updates.setChecked(self.config.get("check_updates", True), animate=False)
+        self.chk_check_updates.toggled.connect(self._on_check_updates_toggle)
+        folder_layout.addSpacing(10)
+        folder_layout.addWidget(self.chk_check_updates)
         folder_layout.addStretch()
 
         # ============ Tab: Sounds ============
@@ -10994,6 +11208,10 @@ class SettingsDialog(QDialog):
 
     def on_backup_after_toggle(self, state):
         self.config["backup_after_sync"] = bool(state)
+        save_config(self.config)
+
+    def _on_check_updates_toggle(self, state):
+        self.config["check_updates"] = bool(state)
         save_config(self.config)
 
     def on_volume_changed(self, value):
@@ -11288,6 +11506,17 @@ class MainWindow(QWidget):
         self.btn_backup.clicked.connect(self.backup_from_menu)
         sidebar_layout.addWidget(self.btn_import)
         sidebar_layout.addWidget(self.btn_backup)
+        # Aparece solo si hay una version nueva en GitHub
+        self.btn_update = QPushButton("")
+        accent_u = self.config.get("accent_color", "#00f2fe")
+        self.btn_update.setStyleSheet(
+            f"QPushButton {{ background: {accent_u}; color: #0d0d12; font-size: 13px; font-weight: 800; text-align: left;"
+            f" padding: 9px 14px; border-radius: 10px; border: none; margin-top: 4px; }}"
+            f" QPushButton:hover {{ background: #ffffff; }}")
+        self.btn_update.hide()
+        self.btn_update.clicked.connect(self.open_update)
+        self._update_info = None
+        sidebar_layout.addWidget(self.btn_update)
         sidebar_layout.addSpacing(6)
 
         self.btn_settings = QPushButton("")
@@ -11324,8 +11553,10 @@ class MainWindow(QWidget):
             lambda root: show_toast(self, tr(self.lang, "card_detected", root=root)))
         self.sync_page.activity_progress.connect(
             lambda pct: self.btn_nav_activity.set_progress(pct, self.get_current_theme_color()))
+        JOINED_PARTS.update(self.config.get("joined_parts") or [])
         self.taskbar = TaskbarProgress(self)
         self.sync_page.activity_progress.connect(self.taskbar.set)
+        QTimer.singleShot(8000, self.check_updates)
 
         # Assistent nur bauen, wenn er tatsaechlich noch gebraucht wird -
         # spart bei jedem normalen Start (nach der ersten Einrichtung) das
@@ -11530,6 +11761,63 @@ class MainWindow(QWidget):
         # 3) importar
         self._go_to_sync_page()
         self.sync_page.start_import(dlg.source, dlg.target, only_paths=dlg.only_paths)
+
+    def make_light_version(self, path):
+        def done(ok, stats):
+            outs = stats.get("outputs") or []
+            if ok and outs:
+                show_in_explorer(outs[0])
+        self.show_activity()
+        self.sync_page.start_tool(tr(self.lang, "light_title", name=os.path.basename(path)),
+                                  [light_version_job(path, self.lang)], done)
+
+    def open_join_dialog(self):
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            groups = find_chapter_groups(self.sync_page.sync_target_dir)
+        finally:
+            QApplication.restoreOverrideCursor()
+        dlg = JoinDialog(self, self.lang, groups, self.config.get("accent_color", "#00f2fe"))
+        if dlg.exec() == QDialog.DialogCode.Accepted and dlg.chosen():
+            self.join_groups(dlg.chosen(), dlg.chk_recycle.isChecked())
+
+    def _remember_joined(self, group):
+        for x in group["parts"]:
+            try:
+                JOINED_PARTS.add(f"{os.path.basename(x).lower()}|{os.path.getsize(x)}")
+            except OSError:
+                pass
+        self.config["joined_parts"] = sorted(JOINED_PARTS)
+        save_config(self.config)
+
+    def join_groups(self, groups, recycle=False):
+        jobs = [join_job(g, self.lang, recycle, on_joined=self._remember_joined) for g in groups]
+
+        def done(ok, stats):
+            if stats.get("copied"):
+                self.videos_page.refresh()
+        self.show_activity()
+        self.sync_page.start_tool(tr(self.lang, "join_task_title", n=len(groups)), jobs, done)
+
+    def check_updates(self):
+        """Busca una version nueva en GitHub (solo en la app instalada)."""
+        if not self.config.get("check_updates", True):
+            return
+        if not getattr(sys, "frozen", False) and not os.environ.get("GOPROSYNC_TEST_UPDATE"):
+            return
+        self._update_thread = UpdateCheckThread()
+        self._update_thread.found.connect(self._on_update_found)
+        self._update_thread.start()
+
+    def _on_update_found(self, info):
+        self._update_info = info
+        self.btn_update.setText(tr(self.lang, "update_btn", v=info["version"]))
+        self.btn_update.show()
+        show_toast(self, tr(self.lang, "update_available", v=info["version"]))
+
+    def open_update(self):
+        if self._update_info:
+            UpdateDialog(self, self.lang, self._update_info, self.config.get("accent_color", "#00f2fe")).exec()
 
     def backup_from_menu(self):
         """Respaldar a disco: dialogo con carpeta a respaldar + destino
@@ -11737,11 +12025,11 @@ class MainWindow(QWidget):
         if ConfirmQuitDialog(self, self.lang).exec() != QDialog.DialogCode.Accepted:
             return False
         sp._import_queue.clear()
-        for attr in ("sync_worker", "backup_worker"):
+        for attr in ("sync_worker", "backup_worker", "tool_worker"):
             w = getattr(sp, attr, None)
             if w is not None and w.isRunning():
                 w.cancel()
-        for attr in ("sync_worker", "backup_worker"):
+        for attr in ("sync_worker", "backup_worker", "tool_worker"):
             w = getattr(sp, attr, None)
             if w is not None and w.isRunning():
                 w.wait(15000)
@@ -11753,11 +12041,11 @@ class MainWindow(QWidget):
         preguntar (Windows da unos pocos segundos)."""
         sp = self.sync_page
         sp._import_queue.clear()
-        for attr in ("sync_worker", "backup_worker"):
+        for attr in ("sync_worker", "backup_worker", "tool_worker"):
             w = getattr(sp, attr, None)
             if w is not None and w.isRunning():
                 w.cancel()
-        for attr in ("sync_worker", "backup_worker"):
+        for attr in ("sync_worker", "backup_worker", "tool_worker"):
             w = getattr(sp, attr, None)
             if w is not None and w.isRunning():
                 w.wait(4000)
@@ -11890,6 +12178,519 @@ def bring_to_front(window):
             u32.keybd_event(VK_MENU, 0, KEYUP, 0)
     except Exception:
         pass
+
+
+_FFMPEG = {"exe": None}
+
+
+def ffmpeg_exe():
+    """ffmpeg incluido con la app (paquete imageio-ffmpeg)."""
+    if _FFMPEG["exe"] is None:
+        try:
+            import imageio_ffmpeg
+            _FFMPEG["exe"] = imageio_ffmpeg.get_ffmpeg_exe()
+        except Exception as e:
+            print("[ffmpeg]", e)
+            _FFMPEG["exe"] = ""
+    return _FFMPEG["exe"] or None
+
+
+def run_ffmpeg(args, duration, progress=None, cancel=lambda: False, stall_s=180):
+    """Corre ffmpeg con progreso real (por tiempo de video procesado).
+    Devuelve (ok, mensaje_de_error). Cancelar o 'trabado' cortan el proceso."""
+    exe = ffmpeg_exe()
+    if not exe:
+        raise RuntimeError("ffmpeg")
+    errlog = tempfile.NamedTemporaryFile(prefix="gpsync_ff_", suffix=".log", delete=False)
+    errlog.close()
+    cmd = [exe, "-hide_banner", "-nostdin", "-y", "-loglevel", "error", "-progress", "pipe:1", "-nostats"] + list(args)
+    with open(errlog.name, "w", encoding="utf-8", errors="replace") as ferr:
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=ferr, text=True, encoding="utf-8",
+                                errors="replace", startupinfo=_hidden_startupinfo(), bufsize=1)
+        last = {"t": time.monotonic()}
+        done = {"v": False}
+
+        def watchdog():
+            while not done["v"]:
+                time.sleep(0.3)
+                if cancel() or time.monotonic() - last["t"] > stall_s:
+                    try:
+                        proc.kill()
+                    except Exception:
+                        pass
+                    return
+        threading.Thread(target=watchdog, daemon=True).start()
+        try:
+            for line in proc.stdout:
+                last["t"] = time.monotonic()
+                if line.startswith("out_time_us=") or line.startswith("out_time_ms="):
+                    try:
+                        us = int(line.split("=", 1)[1].strip())
+                    except ValueError:
+                        continue
+                    if progress and duration:
+                        progress(max(0.0, min(99.9, us / 1e6 / duration * 100.0)))
+            proc.wait()
+        finally:
+            done["v"] = True
+    try:
+        err = open(errlog.name, encoding="utf-8", errors="replace").read().strip()
+        os.remove(errlog.name)
+    except Exception:
+        err = ""
+    if cancel():
+        return False, "cancelled"
+    return proc.returncode == 0, (err.splitlines()[-1] if err else f"codigo {proc.returncode}")
+
+
+class ToolJobThread(QThread):
+    """Corre una lista de trabajos (unir, version liviana, reparar...) con la
+    misma interfaz que una copia: se ve en Actividad con progreso y Cancelar."""
+    progress = Signal(int, int, str, float)
+    finished_sync = Signal(bool, str, dict)
+    plan = Signal(object)
+
+    def __init__(self, jobs, lang, parent=None):
+        super().__init__(parent)
+        self.jobs, self.lang = jobs, lang       # [{"name", "size", "run": f(progress, cancel) -> (ok, info)}]
+        self._cancel = False
+
+    def cancel(self):
+        self._cancel = True
+
+    def run(self):
+        self.plan.emit([int(j.get("size") or 1) for j in self.jobs])
+        ok_n, errors, outputs, notes = 0, [], [], []
+        total = len(self.jobs)
+        for idx, job in enumerate(self.jobs, start=1):
+            if self._cancel:
+                break
+            name = job["name"]
+            self.progress.emit(idx, total, name, 0.0)
+            try:
+                ok, info = job["run"](lambda pct, i=idx, n=name: self.progress.emit(i, total, n, pct),
+                                      lambda: self._cancel)
+            except Exception as e:
+                traceback.print_exc()
+                ok, info = False, str(e)
+            if self._cancel:
+                break
+            if ok:
+                ok_n += 1
+                self.progress.emit(idx, total, name, 100.0)
+                if isinstance(info, dict):
+                    if info.get("output"):
+                        outputs.append(info["output"])
+                    if info.get("note"):
+                        notes.append(info["note"])
+            else:
+                errors.append((name, info if isinstance(info, str) else tr(self.lang, "err_unknown")))
+        data = {"copied": ok_n, "total": total, "errors": len(errors), "error_list": errors, "outputs": outputs}
+        if self._cancel:
+            data["cancelled"] = True
+            self.finished_sync.emit(False, tr(self.lang, "sync_cancelled_msg", copied=ok_n, total=total), data)
+            return
+        msg = " ".join(notes) if (notes and total == 1) else tr(self.lang, "tools_done", ok=ok_n, total=total)
+        if errors:
+            msg += tr(self.lang, "sync_errors_suffix", errors=len(errors))
+        self.finished_sync.emit(not errors, msg, data)
+
+
+def share_dir():
+    base = QStandardPaths.writableLocation(QStandardPaths.StandardLocation.MoviesLocation) or os.path.expanduser("~")
+    d = os.path.join(base, "GoPro Sync")
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
+def light_version_job(src, lang):
+    """Video chico para compartir (WhatsApp, mail): 720p H.264, inicio rapido."""
+    def run(progress, cancel):
+        info = read_mp4_info(src)
+        base = os.path.splitext(os.path.basename(src))[0]
+        out = os.path.join(share_dir(), f"{base}_liviano.mp4")
+        part = out + ".part.mp4"
+        ok, err = run_ffmpeg(["-i", src, "-map", "0:v:0", "-map", "0:a:0?", "-vf", "scale=-2:'min(720,ih)'",
+                              "-c:v", "libx264", "-preset", "veryfast", "-crf", "27", "-pix_fmt", "yuv420p",
+                              "-c:a", "aac", "-b:a", "128k", "-movflags", "+faststart", part],
+                             info.get("duration") or 0, progress, cancel)
+        if not ok:
+            try:
+                os.remove(part)
+            except OSError:
+                pass
+            return False, tr(lang, "ffmpeg_failed", e=err) if err != "cancelled" else err
+        os.replace(part, out)
+        return True, {"output": out, "note": tr(lang, "light_done", size=_human_size(os.path.getsize(out)))}
+    return {"name": os.path.basename(src), "size": os.path.getsize(src), "run": run}
+
+
+# ---- videos partidos (capitulos de la GoPro)
+_CHAPTER_RE = re.compile(r"^(GOPR|GP(\d\d))(\d{4})\.MP4$", re.IGNORECASE)
+JOINED_PARTS = set()        # "nombre|tamano" de partes ya unidas (para no volver a copiarlas de la camara)
+
+
+def find_chapter_groups(root):
+    """Grupos GOPR1234 + GP011234 + GP021234... en la misma carpeta."""
+    groups = {}
+    for d, _dirs, names in os.walk(root):
+        for n in names:
+            m = _CHAPTER_RE.match(n)
+            if m:
+                order = 0 if m.group(1).upper() == "GOPR" else int(m.group(2))
+                groups.setdefault((d, m.group(3)), []).append((order, os.path.join(d, n)))
+    out = []
+    for (d, num), parts in groups.items():
+        if len(parts) < 2:
+            continue
+        parts.sort()
+        if parts[0][0] != 0:
+            continue                  # falta la primera parte
+        paths = [x for _o, x in parts]
+        joined = os.path.join(d, f"GOPR{num}_unido.MP4")
+        out.append({"name": os.path.basename(paths[0]), "parts": paths, "output": joined,
+                    "size": sum(os.path.getsize(x) for x in paths),
+                    "damaged": [os.path.basename(x) for x in paths if is_broken_mp4(x)],
+                    "done": os.path.exists(joined)})
+    out.sort(key=lambda g: g["parts"][0])
+    return out
+
+
+def chapter_group_of(path):
+    m = _CHAPTER_RE.match(os.path.basename(path))
+    if not m:
+        return None
+    d = os.path.dirname(path)
+    for g in find_chapter_groups_in_dir(d):
+        if os.path.normcase(path) in [os.path.normcase(x) for x in g["parts"]]:
+            return g
+    return None
+
+
+def find_chapter_groups_in_dir(d):
+    try:
+        names = os.listdir(d)
+    except OSError:
+        return []
+    groups = {}
+    for n in names:
+        m = _CHAPTER_RE.match(n)
+        if m:
+            order = 0 if m.group(1).upper() == "GOPR" else int(m.group(2))
+            groups.setdefault(m.group(3), []).append((order, os.path.join(d, n)))
+    out = []
+    for num, parts in groups.items():
+        parts.sort()
+        if len(parts) >= 2 and parts[0][0] == 0:
+            paths = [x for _o, x in parts]
+            out.append({"name": os.path.basename(paths[0]), "parts": paths,
+                        "output": os.path.join(d, f"GOPR{num}_unido.MP4"),
+                        "size": sum(os.path.getsize(x) for x in paths),
+                        "damaged": [os.path.basename(x) for x in paths if is_broken_mp4(x)],
+                        "done": os.path.exists(os.path.join(d, f"GOPR{num}_unido.MP4"))})
+    return out
+
+
+def join_job(group, lang, recycle_parts, on_joined=None):
+    """Une las partes sin recomprimir (video, audio y la pista GPS)."""
+    def run(progress, cancel):
+        out = group["output"]
+        if os.path.exists(out):
+            return True, {"note": tr(lang, "join_already", name=os.path.basename(out))}
+        duration = sum((read_mp4_info(x).get("duration") or 0) for x in group["parts"])
+        lst = tempfile.NamedTemporaryFile("w", suffix=".txt", delete=False, encoding="utf-8")
+        for x in group["parts"]:
+            lst.write("file '" + x.replace("\\", "/").replace("'", "'\\''") + "'\n")
+        lst.close()
+        part = out + ".part.mp4"
+        try:
+            ok, err = run_ffmpeg(["-f", "concat", "-safe", "0", "-i", lst.name, "-map", "0:v", "-map", "0:a?",
+                                  "-map", "0:d?", "-c", "copy", "-copy_unknown", part], duration, progress, cancel)
+        finally:
+            try:
+                os.remove(lst.name)
+            except OSError:
+                pass
+        if not ok or not os.path.exists(part) or os.path.getsize(part) < group["size"] * 0.9:
+            try:
+                os.remove(part)
+            except OSError:
+                pass
+            return False, err if err == "cancelled" else tr(lang, "ffmpeg_failed", e=err)
+        os.replace(part, out)
+        try:
+            shutil.copystat(group["parts"][0], out)
+            _copy_creation_time(group["parts"][0], out)
+        except Exception:
+            pass
+        if on_joined:
+            on_joined(group)
+        if recycle_parts:
+            for x in group["parts"]:
+                move_to_recycle_bin(x)
+        return True, {"output": out, "note": tr(lang, "join_one_done", name=os.path.basename(out))}
+    return {"name": group["name"], "size": group["size"], "run": run}
+
+
+class JoinDialog(QDialog):
+    """Lista los videos partidos y los une (todos o los elegidos)."""
+
+    def __init__(self, parent, lang, groups, accent):
+        super().__init__(parent)
+        self.lang = lang
+        self.groups = [g for g in groups if not g["done"]]
+        self.setWindowTitle(tr(lang, "join_title"))
+        self.setModal(True)
+        self.setMinimumWidth(560)
+        self.setStyleSheet(f"""
+            QDialog {{ background: #1c1e29; }}
+            QLabel {{ color: #fff; background: transparent; }}
+            * {{ font-family: {FONT_STACK}; }}
+            QPushButton {{ background: rgba(255,255,255,0.08); color: #fff; border: 1px solid rgba(255,255,255,0.14);
+                          border-radius: 10px; padding: 8px 16px; font-weight: 600; }}
+            QPushButton:hover {{ background: rgba(255,255,255,0.16); }}
+            QPushButton#primary {{ background: {accent}; color: #0d0d12; border: none; font-weight: 800; }}
+            QPushButton#primary:disabled {{ background: rgba(255,255,255,0.12); color: rgba(255,255,255,0.4); }}
+            QScrollArea {{ border: none; background: transparent; }}
+        """)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(26, 22, 26, 20)
+        lay.setSpacing(10)
+        title = QLabel(tr(lang, "join_title"))
+        title.setStyleSheet("font-size: 19px; font-weight: 800;")
+        intro = QLabel(tr(lang, "join_intro"))
+        intro.setWordWrap(True)
+        intro.setStyleSheet("font-size: 12px; color: rgba(255,255,255,0.65);")
+        lay.addWidget(title)
+        lay.addWidget(intro)
+        box = QWidget()
+        bl = QVBoxLayout(box)
+        bl.setContentsMargins(0, 4, 0, 4)
+        bl.setSpacing(6)
+        self.toggles = []
+        for g in self.groups:
+            folder = os.path.basename(os.path.dirname(g["parts"][0]))
+            if g["damaged"]:
+                lbl = QLabel(tr(lang, "join_damaged", name=f"{folder} · {g['name']}", part=", ".join(g["damaged"])))
+                lbl.setWordWrap(True)
+                lbl.setStyleSheet("font-size: 12px; color: #ff8a8a;")
+                bl.addWidget(lbl)
+                continue
+            t = ToggleSwitch(tr(lang, "join_group", name=f"{folder} · {g['name']}", n=len(g["parts"]),
+                                size=_human_size(g["size"])))
+            t.set_accent(accent)
+            t.setChecked(True, animate=False)
+            t.toggled.connect(lambda _s: self._update())
+            self.toggles.append((t, g))
+            bl.addWidget(t)
+        if not self.groups:
+            none = QLabel(tr(lang, "join_none"))
+            none.setStyleSheet("font-size: 13px; color: rgba(255,255,255,0.6);")
+            bl.addWidget(none)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(box)
+        scroll.setMinimumHeight(min(360, 40 + 34 * max(1, len(self.groups))))
+        lay.addWidget(scroll, 1)
+        self.chk_recycle = ToggleSwitch(tr(lang, "join_recycle"))
+        self.chk_recycle.set_accent(accent)
+        lay.addWidget(self.chk_recycle)
+        self.lbl_space = QLabel("")
+        self.lbl_space.setWordWrap(True)
+        self.lbl_space.setStyleSheet("font-size: 12px; color: #ff8a8a;")
+        lay.addWidget(self.lbl_space)
+        row = QHBoxLayout()
+        row.addStretch()
+        cancel = QPushButton(tr(lang, "cancel_btn"))
+        cancel.clicked.connect(self.reject)
+        self.btn_ok = QPushButton("")
+        self.btn_ok.setObjectName("primary")
+        self.btn_ok.clicked.connect(self.accept)
+        row.addWidget(cancel)
+        row.addWidget(self.btn_ok)
+        lay.addLayout(row)
+        self._update()
+
+    def chosen(self):
+        return [g for t, g in self.toggles if t.isChecked()]
+
+    def _update(self):
+        sel = self.chosen()
+        self.btn_ok.setText(tr(self.lang, "join_start", n=len(sel)))
+        need = sum(g["size"] for g in sel)
+        ok = bool(sel)
+        self.lbl_space.setText("")
+        if sel:
+            try:
+                free = shutil.disk_usage(os.path.dirname(sel[0]["parts"][0])).free
+                if free < need * 1.02:
+                    self.lbl_space.setText(tr(self.lang, "join_space", need=_human_size(need), free=_human_size(free)))
+                    ok = False
+            except Exception:
+                pass
+        self.btn_ok.setEnabled(ok)
+
+
+def _version_tuple(v):
+    try:
+        return tuple(int(x) for x in re.findall(r"\d+", v or "")[:3])
+    except Exception:
+        return (0,)
+
+
+def _http_get(url, timeout=10):
+    import urllib.request
+    req = urllib.request.Request(url, headers={"User-Agent": f"GoProSync/{APP_VERSION}",
+                                               "Accept": "application/vnd.github+json"})
+    return urllib.request.urlopen(req, timeout=timeout)
+
+
+class UpdateCheckThread(QThread):
+    """Consulta la ultima version publicada en GitHub (en segundo plano)."""
+    found = Signal(dict)          # {"version", "url", "size", "page"} si hay una mas nueva
+
+    def run(self):
+        try:
+            with _http_get(f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest") as r:
+                data = json.loads(r.read().decode("utf-8"))
+            tag = (data.get("tag_name") or "").lstrip("vV")
+            if _version_tuple(tag) <= _version_tuple(APP_VERSION):
+                return
+            asset = next((a for a in data.get("assets") or []
+                          if a.get("name", "").lower().startswith("goprosync-setup") and a["name"].lower().endswith(".exe")),
+                         None)
+            if asset:
+                self.found.emit({"version": tag, "url": asset["browser_download_url"], "size": asset.get("size", 0),
+                                 "page": data.get("html_url", "")})
+        except Exception as e:
+            print("[Actualizaciones]", e)
+
+
+class UpdateDownloadThread(QThread):
+    progress = Signal(int)
+    done = Signal(str, str)       # ruta, error
+
+    def __init__(self, url, dest):
+        super().__init__()
+        self.url, self.dest = url, dest
+        self._cancel = False
+
+    def run(self):
+        part = self.dest + ".part"
+        try:
+            with _http_get(self.url, timeout=30) as r, open(part, "wb") as f:
+                total = int(r.headers.get("Content-Length") or 0)
+                got = 0
+                while not self._cancel:
+                    buf = r.read(256 * 1024)
+                    if not buf:
+                        break
+                    f.write(buf)
+                    got += len(buf)
+                    if total:
+                        self.progress.emit(int(got * 100 / total))
+            if self._cancel:
+                raise RuntimeError("cancelado")
+            os.replace(part, self.dest)
+            self.done.emit(self.dest, "")
+        except Exception as e:
+            try:
+                os.remove(part)
+            except OSError:
+                pass
+            self.done.emit("", str(e))
+
+
+class UpdateDialog(QDialog):
+    """Ofrece la version nueva; si se acepta, descarga el instalador y lo
+    corre en modo silencioso (se cierra la app y se vuelve a abrir sola)."""
+
+    def __init__(self, parent, lang, info, accent):
+        super().__init__(parent)
+        self.lang, self.info = lang, info
+        self.worker = None
+        self.setWindowTitle(tr(lang, "update_title"))
+        self.setModal(True)
+        self.setMinimumWidth(500)
+        self.setStyleSheet(f"""
+            QDialog {{ background: #1c1e29; }}
+            QLabel {{ color: #fff; background: transparent; }}
+            * {{ font-family: {FONT_STACK}; }}
+            QPushButton {{ background: rgba(255,255,255,0.08); color: #fff; border: 1px solid rgba(255,255,255,0.14);
+                          border-radius: 10px; padding: 8px 16px; font-weight: 600; }}
+            QPushButton:hover {{ background: rgba(255,255,255,0.16); }}
+            QPushButton#primary {{ background: {accent}; color: #0d0d12; border: none; font-weight: 800; }}
+            QPushButton#primary:disabled {{ background: rgba(255,255,255,0.12); color: rgba(255,255,255,0.4); }}
+            QProgressBar {{ background: rgba(255,255,255,0.08); border: none; border-radius: 6px; height: 10px; }}
+            QProgressBar::chunk {{ background: {accent}; border-radius: 6px; }}
+        """)
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(26, 22, 26, 20)
+        lay.setSpacing(10)
+        q = QLabel(tr(lang, "update_question", v=info["version"], cur=APP_VERSION))
+        q.setWordWrap(True)
+        q.setStyleSheet("font-size: 17px; font-weight: 800;")
+        d = QLabel(tr(lang, "update_detail", size=_human_size(info.get("size") or 0)))
+        d.setWordWrap(True)
+        d.setStyleSheet("font-size: 12px; color: rgba(255,255,255,0.65);")
+        self.bar = QProgressBar()
+        self.bar.setRange(0, 100)
+        self.bar.setTextVisible(False)
+        self.bar.hide()
+        self.lbl_status = QLabel("")
+        self.lbl_status.setStyleSheet("font-size: 12px; color: rgba(255,255,255,0.65);")
+        lay.addWidget(q)
+        lay.addWidget(d)
+        lay.addWidget(self.bar)
+        lay.addWidget(self.lbl_status)
+        lay.addSpacing(6)
+        row = QHBoxLayout()
+        if info.get("page"):
+            notes = QPushButton(tr(lang, "update_notes"))
+            notes.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(info["page"])))
+            row.addWidget(notes)
+        row.addStretch()
+        self.btn_later = QPushButton(tr(lang, "update_later"))
+        self.btn_later.clicked.connect(self.reject)
+        self.btn_now = QPushButton(tr(lang, "update_now"))
+        self.btn_now.setObjectName("primary")
+        self.btn_now.clicked.connect(self._download)
+        row.addWidget(self.btn_later)
+        row.addWidget(self.btn_now)
+        lay.addLayout(row)
+
+    def _download(self):
+        self.btn_now.setEnabled(False)
+        self.bar.show()
+        self.lbl_status.setText(tr(self.lang, "update_downloading", pct=0))
+        dest = os.path.join(tempfile.gettempdir(), f"GoProSync-Setup-{self.info['version']}.exe")
+        self.worker = UpdateDownloadThread(self.info["url"], dest)
+        self.worker.progress.connect(lambda pct: (self.bar.setValue(pct),
+                                                  self.lbl_status.setText(tr(self.lang, "update_downloading", pct=pct))))
+        self.worker.done.connect(self._on_downloaded)
+        self.worker.start()
+
+    def _on_downloaded(self, path, error):
+        if error:
+            self.lbl_status.setText(tr(self.lang, "update_failed", e=error))
+            self.btn_now.setEnabled(True)
+            return
+        self.accept()
+        try:
+            # /SILENT: solo una barrita de progreso; el instalador cierra la app y la vuelve a abrir.
+            subprocess.Popen([path, "/SILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/CLOSEAPPLICATIONS"])
+        except Exception as e:
+            show_toast(self.parent(), tr(self.lang, "update_failed", e=e))
+            return
+        main = self.parent()
+        if hasattr(main, "quit_app"):
+            QTimer.singleShot(300, main.quit_app)
+
+    def reject(self):
+        if self.worker is not None and self.worker.isRunning():
+            self.worker._cancel = True
+            self.worker.wait(3000)
+        super().reject()
 
 
 def apply_dark_titlebar(hwnd):
