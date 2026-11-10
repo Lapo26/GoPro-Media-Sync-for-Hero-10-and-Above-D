@@ -321,6 +321,18 @@ TRANSLATIONS = {
         "cam_preview_loading": "Vorschau wird von der Kamera geholt…",
         "cam_preview_failed": "Die Vorschau konnte nicht von der Kamera geholt werden.",
         "cam_view_btn": "Dateien der Kamera ansehen",
+        "ctx_map": "Route auf der Karte anzeigen",
+        "gps_title": "GPS-Route · {name}",
+        "gps_reading": "GPS des Videos wird gelesen…",
+        "gps_none": "Dieses Video hat keine GPS-Daten (oder die Kamera hatte beim Aufnehmen kein Signal).",
+        "gps_stats": "{dist} · max. {vmax} km/h · Schnitt {vavg} km/h · Höhe {amin}–{amax} m · {dur}",
+        "gps_hint": "Ziehen zum Verschieben · Mausrad zum Zoomen",
+        "gps_open_osm": "In OpenStreetMap öffnen",
+        "backup_verify": "Auch den Inhalt des bereits Gesicherten prüfen (langsamer)",
+        "backup_verifying_name": "{name} · wird geprüft",
+        "backup_verified_ok": " {n} geprüft: alles in Ordnung.",
+        "backup_verified_bad": " {n} geprüft: {bad} waren im Backup beschädigt und wurden neu kopiert.",
+        "err_verify_mismatch": "Die Backup-Kopie war beschädigt und konnte nicht neu kopiert werden.",
         "ctx_light": "Leichte Version zum Teilen erstellen",
         "ctx_join": "Die {n} Teile dieses Videos zusammenfügen",
         "light_title": "Leichte Version: {name}",
@@ -657,6 +669,18 @@ TRANSLATIONS = {
         "cam_preview_loading": "Getting the preview from the camera…",
         "cam_preview_failed": "Could not get the preview from the camera.",
         "cam_view_btn": "View camera files",
+        "ctx_map": "Show route on the map",
+        "gps_title": "GPS route · {name}",
+        "gps_reading": "Reading the video's GPS…",
+        "gps_none": "This video has no GPS data (or the camera had no signal while recording).",
+        "gps_stats": "{dist} · max speed {vmax} km/h · average {vavg} km/h · altitude {amin}–{amax} m · {dur}",
+        "gps_hint": "Drag to move · wheel to zoom",
+        "gps_open_osm": "Open in OpenStreetMap",
+        "backup_verify": "Also verify the contents of what is already backed up (slower)",
+        "backup_verifying_name": "{name} · verifying",
+        "backup_verified_ok": " Verified {n}: all good.",
+        "backup_verified_bad": " Verified {n}: {bad} were damaged in the backup and were copied again.",
+        "err_verify_mismatch": "The backup copy was damaged and could not be copied again.",
         "ctx_light": "Create a light version to share",
         "ctx_join": "Join the {n} parts of this video",
         "light_title": "Light version: {name}",
@@ -993,6 +1017,18 @@ TRANSLATIONS = {
         "cam_preview_loading": "Trayendo la vista previa desde la cámara…",
         "cam_preview_failed": "No se pudo traer la vista previa de la cámara.",
         "cam_view_btn": "Ver archivos de la cámara",
+        "ctx_map": "Ver recorrido en el mapa",
+        "gps_title": "Recorrido GPS · {name}",
+        "gps_reading": "Leyendo el GPS del video…",
+        "gps_none": "Este video no tiene datos GPS (o la cámara no tenía señal mientras grababa).",
+        "gps_stats": "{dist} · vel. máx. {vmax} km/h · promedio {vavg} km/h · altura {amin}–{amax} m · {dur}",
+        "gps_hint": "Arrastrá para mover · rueda para acercar",
+        "gps_open_osm": "Abrir en OpenStreetMap",
+        "backup_verify": "Verificar también el contenido de lo ya respaldado (más lento)",
+        "backup_verifying_name": "{name} · verificando",
+        "backup_verified_ok": " Verificados {n}: todo bien.",
+        "backup_verified_bad": " Verificados {n}: {bad} estaban dañados en el respaldo y se volvieron a copiar.",
+        "err_verify_mismatch": "La copia del respaldo estaba dañada y no se pudo volver a copiar.",
         "ctx_light": "Crear versión liviana para compartir",
         "ctx_join": "Unir las {n} partes de este video",
         "light_title": "Versión liviana: {name}",
@@ -3580,6 +3616,27 @@ class _CopyCancelled(Exception):
     pass
 
 
+def files_identical(a, b, progress=None, cancel=lambda: False, chunk=4 * 1024 * 1024):
+    """Compara dos archivos byte por byte (se corta en la primera diferencia)."""
+    def work(beat):
+        done = 0
+        with open(a, "rb") as fa, open(b, "rb") as fb:
+            while True:
+                if cancel():
+                    raise _CopyCancelled()
+                x = fa.read(chunk)
+                y = fb.read(chunk)
+                beat()
+                if x != y:
+                    return False
+                if not x:
+                    return True
+                done += len(x)
+                if progress:
+                    progress(done)
+    return call_with_stall_guard(work, 60, cancel)
+
+
 class ReadStalled(TimeoutError):
     """La lectura no avanzo en el tiempo limite (sector danado, tarjeta trabada)."""
 
@@ -3713,11 +3770,12 @@ class BackupWorkerThread(QThread):
     finished_sync = Signal(bool, str, dict)
     plan = Signal(object)
 
-    def __init__(self, source_dir, backup_dirs, lang="de", parent=None):
+    def __init__(self, source_dir, backup_dirs, lang="de", parent=None, verify=False):
         super().__init__(parent)
         self.source_dir = source_dir
         self.backup_dirs = [d for d in (backup_dirs or []) if d]
         self.lang = lang
+        self.verify = verify          # comparar tambien el contenido de lo ya respaldado
         self._cancel = False
 
     def cancel(self):
@@ -3763,6 +3821,7 @@ class BackupWorkerThread(QThread):
         skipped = 0
         missing = []
         pending = []          # (src, rel, size, dst) de TODOS los destinos
+        to_verify = []        # ya respaldados, a comparar byte por byte
         for dest_root in self.backup_dirs:
             if self._cancel:
                 break
@@ -3776,15 +3835,17 @@ class BackupWorkerThread(QThread):
                     # Tolerancia de 2 s: FAT/exFAT guarda la fecha con esa precision.
                     if dst_st.st_size == size and abs(dst_st.st_mtime - mtime) <= 2:
                         skipped += 1
+                        if self.verify:
+                            to_verify.append((src, rel, size, dst))
                         continue
                 except OSError:
                     pass
                 pending.append((src, rel, size, dst))
-        self.plan.emit([size for _s, _r, size, _d in pending])
+        self.plan.emit([size for _s, _r, size, _d in pending] + [size for _s, _r, size, _d in to_verify])
 
         copied = errors = 0
         error_list = []
-        total = len(pending)
+        total = len(pending) + len(to_verify)
         for idx, (src, rel, size, dst) in enumerate(pending, start=1):
             if self._cancel:
                 break
@@ -3808,13 +3869,43 @@ class BackupWorkerThread(QThread):
                 errors += 1
                 error_list.append((name, str(errs[0]) if errs else tr(self.lang, "err_unknown")))
 
+        # Verificacion: lo que "parece" respaldado (mismo tamano y fecha) se
+        # compara byte por byte; si la copia se dano en el disco, se vuelve a copiar.
+        verified = bad = 0
+        for vidx, (src, rel, size, dst) in enumerate(to_verify, start=len(pending) + 1):
+            if self._cancel:
+                break
+            name = tr(self.lang, "backup_verifying_name", name=os.path.basename(rel))
+            self.progress.emit(vidx, total, name, 0.0)
+            try:
+                same = files_identical(src, dst, lambda done, i=vidx, n=name, sz=size:
+                                       self.progress.emit(i, total, n, done * 100.0 / sz if sz else 100.0),
+                                       lambda: self._cancel)
+            except _CopyCancelled:
+                break
+            except Exception as e:
+                errors += 1
+                error_list.append((os.path.basename(rel), str(e)))
+                continue
+            verified += 1
+            if not same:
+                bad += 1
+                print(f"[Respaldo] Copia danada, se vuelve a copiar: {dst}")
+                if not copy_file_preserving(src, dst, size, None, should_cancel=lambda: self._cancel):
+                    errors += 1
+                    error_list.append((os.path.basename(rel), tr(self.lang, "err_verify_mismatch")))
+            self.progress.emit(vidx, total, name, 100.0)
+
         info = {"copied": copied, "skipped": skipped, "errors": errors, "missing": missing,
-                "error_list": error_list, "total": total}
+                "error_list": error_list, "total": total, "verified": verified, "repaired": bad}
         if self._cancel:
             info["cancelled"] = True
             self._finish(False, tr(self.lang, "backup_cancelled", copied=copied), info)
             return
         msg = tr(self.lang, "backup_done", copied=copied, skipped=skipped)
+        if self.verify and verified:
+            msg += (tr(self.lang, "backup_verified_bad", n=verified, bad=bad) if bad
+                    else tr(self.lang, "backup_verified_ok", n=verified))
         if missing:
             msg += tr(self.lang, "backup_missing_suffix", dirs=", ".join(missing))
         if errors:
@@ -6718,6 +6809,8 @@ class GalleryBase(QWidget):
         if self.KIND == "video" and hasattr(main, "make_light_version"):
             menu.addSeparator()
             menu.addAction(tr(self.lang, "ctx_light"), lambda: main.make_light_version(path))
+            menu.addAction(tr(self.lang, "ctx_map"), lambda: GpsMapDialog(
+                self, self.lang, path, getattr(main, "get_current_theme_color", lambda: "#00f2fe")()).exec())
             group = chapter_group_of(path)
             if group and not group["done"] and not group["damaged"]:
                 menu.addAction(tr(self.lang, "ctx_join", n=len(group["parts"])), lambda: main.join_groups([group]))
@@ -7948,7 +8041,7 @@ class SyncTabWidget(QWidget):
             # Mostrar unos segundos el resultado del sync antes del respaldo.
             QTimer.singleShot(2500, self.start_backup)
 
-    def start_backup(self, source=None, dests=None):
+    def start_backup(self, source=None, dests=None, verify=False):
         """Respalda la biblioteca (u otra carpeta) a los discos elegidos, en
         segundo plano: se ve en Actividad, se puede cancelar y se encola si
         ya hay otra copia en curso."""
@@ -7959,12 +8052,12 @@ class SyncTabWidget(QWidget):
             self.sync_popup.show()
             QTimer.singleShot(5000, self._hide_sync_popup)
             return
-        task = ("backup", source, tuple(dests))
+        task = ("backup", source, tuple(dests), verify)
         if self._backup_busy():
             if self._try_enqueue(task):
                 show_toast(self, tr(self.lang, "backup_queued"))
             return
-        self.backup_worker = BackupWorkerThread(source, dests, self.lang, self)
+        self.backup_worker = BackupWorkerThread(source, dests, self.lang, self, verify=verify)
         self.backup_worker.progress.connect(self.on_backup_progress)
         self.backup_worker.finished_sync.connect(self.on_backup_done)
         self._backup_task = task
@@ -7990,7 +8083,7 @@ class SyncTabWidget(QWidget):
         self.backup_panel.hide()
         task = self._pop_next("backup") if not stats.get("cancelled") else None
         if task is not None:
-            QTimer.singleShot(400, lambda: self.start_backup(task[1], list(task[2])))
+            QTimer.singleShot(400, lambda: self.start_backup(task[1], list(task[2]), task[3] if len(task) > 3 else False))
             return
         if stats.get("copied", 0) > 0:
             SoundManager.play_finish()
@@ -8772,7 +8865,7 @@ class BackupDialog(QDialog):
     """Respaldar a disco: confirmar carpeta a respaldar y destino (ambos
     cambiables) con un resumen. La copia corre despues en Actividad."""
 
-    def __init__(self, parent, lang, source, dest, accent, remember_default=True):
+    def __init__(self, parent, lang, source, dest, accent, remember_default=True, verify_default=False):
         super().__init__(parent)
         self.lang = lang
         self.source = source
@@ -8835,6 +8928,10 @@ class BackupDialog(QDialog):
         self.chk_remember.set_accent(accent)
         self.chk_remember.setChecked(remember_default, animate=False)
         lay.addWidget(self.chk_remember)
+        self.chk_verify = ToggleSwitch(tr(lang, "backup_verify"))
+        self.chk_verify.set_accent(accent)
+        self.chk_verify.setChecked(verify_default, animate=False)
+        lay.addWidget(self.chk_verify)
         note = QLabel(tr(lang, "backup_hint"))
         note.setWordWrap(True)
         note.setStyleSheet("font-size: 11px; color: #888;")
@@ -9177,6 +9274,427 @@ def _mp4_boxes(data, start=0, end=None):
             break
         yield typ, pos + hdr, pos + size
         pos += size
+
+
+# --- [ GPS DE LA GOPRO (telemetria GPMF en la pista "gpmd") ] ---
+
+def _read_moov(path):
+    with open(path, "rb") as f:
+        f.seek(0, os.SEEK_END)
+        fsize = f.tell()
+        pos = 0
+        while pos + 8 <= fsize:
+            f.seek(pos)
+            h = f.read(16)
+            size = struct.unpack(">I", h[:4])[0]
+            if size == 1:
+                size = struct.unpack(">Q", h[8:16])[0]
+            elif size == 0:
+                size = fsize - pos
+            if size < 8:
+                return None
+            if h[4:8] == b"moov":
+                f.seek(pos)
+                return f.read(min(size, 64 * 1024 * 1024))
+            pos += size
+    return None
+
+
+def _child(data, start, end, typ):
+    for t, a, b in _mp4_boxes(data, start, end):
+        if t == typ:
+            return a, b
+    return None
+
+
+def _gpmd_sample_ranges(moov):
+    """(offset, tamano) de cada muestra de la pista de telemetria gpmd."""
+    for t, a, b in _mp4_boxes(moov, 8):
+        if t != b"trak":
+            continue
+        mdia = _child(moov, a, b, b"mdia")
+        if not mdia:
+            continue
+        minf = _child(moov, *mdia, b"minf")
+        stbl = _child(moov, *minf, b"stbl") if minf else None
+        stsd = _child(moov, *stbl, b"stsd") if stbl else None
+        if not stsd or moov[stsd[0] + 12:stsd[0] + 16] != b"gpmd":
+            continue
+        sz = _child(moov, *stbl, b"stsz")
+        co = _child(moov, *stbl, b"stco")
+        co64 = _child(moov, *stbl, b"co64")
+        sc = _child(moov, *stbl, b"stsc")
+        if not sz or not sc or not (co or co64):
+            return []
+        fixed, count = struct.unpack(">II", moov[sz[0] + 4:sz[0] + 12])
+        sizes = [fixed] * count if fixed else list(struct.unpack(f">{count}I", moov[sz[0] + 12:sz[0] + 12 + 4 * count]))
+        if co:
+            n = struct.unpack(">I", moov[co[0] + 4:co[0] + 8])[0]
+            offsets = list(struct.unpack(f">{n}I", moov[co[0] + 8:co[0] + 8 + 4 * n]))
+        else:
+            n = struct.unpack(">I", moov[co64[0] + 4:co64[0] + 8])[0]
+            offsets = list(struct.unpack(f">{n}Q", moov[co64[0] + 8:co64[0] + 8 + 8 * n]))
+        ne = struct.unpack(">I", moov[sc[0] + 4:sc[0] + 8])[0]
+        entries = [struct.unpack(">III", moov[sc[0] + 8 + 12 * i:sc[0] + 20 + 12 * i]) for i in range(ne)]
+        out, si = [], 0
+        for ci, off in enumerate(offsets, start=1):
+            per = 1
+            for first, spc, _d in entries:
+                if ci >= first:
+                    per = spc
+            for _ in range(per):
+                if si >= len(sizes):
+                    break
+                out.append((off, sizes[si]))
+                off += sizes[si]
+                si += 1
+        return out
+    return []
+
+
+_GPMF_FMT = {"b": "b", "B": "B", "s": "h", "S": "H", "l": "i", "L": "I", "f": "f", "d": "d", "j": "q", "J": "Q"}
+
+
+def _gpmf_walk(buf, pos, end, out):
+    """Recorre el KLV de GPMF y junta los puntos GPS5 (con su SCAL y la calidad)."""
+    scal, fix, prec = None, 3, 0
+    while pos + 8 <= end:
+        key = buf[pos:pos + 4]
+        typ = chr(buf[pos + 4])
+        ssize = buf[pos + 5]
+        rep_ = struct.unpack(">H", buf[pos + 6:pos + 8])[0]
+        dstart = pos + 8
+        dlen = ssize * rep_
+        if dstart + dlen > end:
+            break
+        if buf[pos + 4] == 0:                       # contenedor (DEVC / STRM)
+            _gpmf_walk(buf, dstart, dstart + dlen, out)
+        elif key in (b"SCAL", b"GPSF", b"GPSP", b"GPS5") and typ in _GPMF_FMT:
+            fmt = _GPMF_FMT[typ]
+            width = struct.calcsize(fmt)
+            n = dlen // width
+            vals = struct.unpack(f">{n}{fmt}", buf[dstart:dstart + n * width])
+            if key == b"SCAL":
+                scal = vals
+            elif key == b"GPSF":
+                fix = vals[0]
+            elif key == b"GPSP":
+                prec = vals[0]
+            elif key == b"GPS5" and n >= 5:
+                sc = list(scal) if scal and len(scal) >= 5 else [1] * 5
+                block = []
+                for i in range(0, n - 4, 5):
+                    lat, lon, alt, v2, _v3 = (vals[i + k] / (sc[k] or 1) for k in range(5))
+                    if -90 <= lat <= 90 and -180 <= lon <= 180 and (lat or lon):
+                        block.append((lat, lon, alt, v2))
+                out.append((fix, prec, block))       # un bloque por segundo, con su calidad
+        pos = dstart + ((dlen + 3) & ~3)
+
+
+def read_gopro_gps(path):
+    """Bloques (fix, precision, [(lat, lon, alt m, velocidad 2D m/s)]) del GPS de un video."""
+    moov = _read_moov(path)
+    if not moov:
+        return []
+    pts = []
+    with open(path, "rb") as f:
+        for off, size in _gpmd_sample_ranges(moov):
+            if size <= 0 or size > 4 * 1024 * 1024:
+                continue
+            f.seek(off)
+            buf = f.read(size)
+            _gpmf_walk(buf, 0, len(buf), pts)
+    return pts
+
+
+def _haversine(a, b):
+    import math
+    la1, lo1, la2, lo2 = map(math.radians, (a[0], a[1], b[0], b[1]))
+    h = math.sin((la2 - la1) / 2) ** 2 + math.cos(la1) * math.cos(la2) * math.sin((lo2 - lo1) / 2) ** 2
+    return 6371000 * 2 * math.asin(min(1.0, math.sqrt(h)))
+
+
+def clean_gps(blocks, duration):
+    """Filtra el ruido del GPS y calcula las estadisticas. Mientras busca
+    senal la posicion deriva cientos de metros aunque la camara este quieta:
+    se usan solo segundos con buena senal, sin puntos lejos de la mediana del
+    segundo ni saltos imposibles para la velocidad medida. La distancia sale
+    de la velocidad del GPS (Doppler, confiable) a lo largo del tiempo."""
+    if not blocks:
+        return None
+    sec = (duration / len(blocks)) if duration else 1.0
+    ok = lambda f, d: d == 0 or d < 500
+    min_fix = 3 if any(f >= 3 and ok(f, d) and pts for f, d, pts in blocks) else 2
+    pts_out, speeds, kept_med, gap = [], [], None, 0
+    for f, d, pts in blocks:
+        gap += 1
+        if f < min_fix or not ok(f, d) or not pts:
+            continue
+        lats = sorted(p[0] for p in pts)
+        lons = sorted(p[1] for p in pts)
+        med = (lats[len(lats) // 2], lons[len(lons) // 2])
+        pts = [p for p in pts if _haversine(p, med) <= 50]
+        if not pts:
+            continue
+        v = sum(p[3] for p in pts) / len(pts)
+        if kept_med is not None and _haversine(med, kept_med) > 25 + 3 * max(v, 1.0) * gap * sec:
+            continue                       # salto imposible: deriva del GPS
+        kept_med, gap = med, 0
+        pts_out.extend(pts)
+        speeds.append(v)
+    if len(pts_out) < 2:
+        return None
+    dist = sum(speeds) * sec
+    alts = sorted(p[2] for p in pts_out)
+    return {"points": pts_out,
+            "dist": dist,
+            "vmax": max(speeds) * 3.6,
+            "vavg": (dist / (len(speeds) * sec) * 3.6) if speeds else 0,
+            "amin": alts[int(len(alts) * 0.05)],
+            "amax": alts[min(len(alts) - 1, int(len(alts) * 0.95))]}
+
+
+def read_gopro_track(path):
+    return clean_gps(read_gopro_gps(path), read_mp4_info(path).get("duration") or 0)
+
+
+class TileMapWidget(QWidget):
+    """Mapa de OpenStreetMap con el recorrido: arrastrar para mover, rueda
+    para acercar. Las teselas se guardan en disco para no volver a pedirlas."""
+    tile_loaded = Signal(str)
+
+    def __init__(self, points, accent, parent=None):
+        super().__init__(parent)
+        from concurrent.futures import ThreadPoolExecutor
+        self.points = points
+        self.accent = QColor(accent)
+        self.tiles = {}
+        self.pending = set()
+        self.pool = ThreadPoolExecutor(max_workers=4)
+        self.cache_dir = os.path.join(os.environ.get("LOCALAPPDATA") or tempfile.gettempdir(), "GoProSyncPro", "tiles")
+        self.zoom = 3
+        self.cx = self.cy = 0.0
+        self._drag = None
+        self.setMinimumSize(640, 420)
+        self.setCursor(Qt.CursorShape.OpenHandCursor)
+        self.tile_loaded.connect(lambda _k: self.update())
+        self._fitted = False
+
+    @staticmethod
+    def _world(lat, lon, z):
+        import math
+        n = 256 * (2 ** z)
+        lat = max(-85.0511, min(85.0511, lat))
+        x = (lon + 180.0) / 360.0 * n
+        y = (1 - math.log(math.tan(math.radians(lat)) + 1 / math.cos(math.radians(lat))) / math.pi) / 2 * n
+        return x, y
+
+    def fit(self):
+        if not self.points:
+            return
+        lats = [p[0] for p in self.points]
+        lons = [p[1] for p in self.points]
+        w, h = max(200, self.width() - 80), max(200, self.height() - 80)
+        z = 17
+        while z > 2:
+            x1, y1 = self._world(max(lats), min(lons), z)
+            x2, y2 = self._world(min(lats), max(lons), z)
+            if abs(x2 - x1) <= w and abs(y2 - y1) <= h:
+                break
+            z -= 1
+        self.zoom = z
+        x1, y1 = self._world(max(lats), min(lons), z)
+        x2, y2 = self._world(min(lats), max(lons), z)
+        self.cx, self.cy = (x1 + x2) / 2, (y1 + y2) / 2
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if not self._fitted:
+            self._fitted = True
+            self.fit()
+
+    def _tile(self, z, x, y):
+        key = f"{z}/{x}/{y}"
+        if key in self.tiles:
+            return self.tiles[key]
+        path = os.path.join(self.cache_dir, str(z), str(x), f"{y}.png")
+        if os.path.exists(path):
+            pm = QPixmap(path)
+            if not pm.isNull():
+                self.tiles[key] = pm
+                return pm
+        if key not in self.pending:
+            self.pending.add(key)
+            self.pool.submit(self._download, key, path)
+        return None
+
+    def _download(self, key, path):
+        try:
+            with _http_get(f"https://tile.openstreetmap.org/{key}.png", timeout=15) as r:
+                data = r.read()
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path + ".part", "wb") as f:
+                f.write(data)
+            os.replace(path + ".part", path)
+            self.tile_loaded.emit(key)
+        except Exception as e:
+            print("[Mapa]", key, e)
+
+    def paintEvent(self, event):
+        import math
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+        painter.fillRect(self.rect(), QColor("#20232e"))
+        z = self.zoom
+        n = 2 ** z
+        left = self.cx - self.width() / 2
+        top = self.cy - self.height() / 2
+        for tx in range(int(math.floor(left / 256)), int(math.floor((left + self.width()) / 256)) + 1):
+            for ty in range(int(math.floor(top / 256)), int(math.floor((top + self.height()) / 256)) + 1):
+                if ty < 0 or ty >= n:
+                    continue
+                pm = self._tile(z, tx % n, ty)
+                if pm is not None:
+                    painter.drawPixmap(QRectF(tx * 256 - left, ty * 256 - top, 256, 256), pm, QRectF(pm.rect()))
+        if self.points:
+            step = max(1, len(self.points) // 3000)
+            path = QPainterPath()
+            for i, pnt in enumerate(self.points[::step]):
+                x, y = self._world(pnt[0], pnt[1], z)
+                pt = QPointF(x - left, y - top)
+                if i == 0:
+                    path.moveTo(pt)
+                else:
+                    path.lineTo(pt)
+            painter.setPen(QPen(QColor(0, 0, 0, 140), 7, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
+            painter.drawPath(path)
+            painter.setPen(QPen(self.accent, 4, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
+            painter.drawPath(path)
+            for pnt, color in ((self.points[0], "#2ecc71"), (self.points[-1], "#ff5c5c")):
+                x, y = self._world(pnt[0], pnt[1], z)
+                painter.setPen(QPen(QColor("#ffffff"), 2))
+                painter.setBrush(QColor(color))
+                painter.drawEllipse(QPointF(x - left, y - top), 7, 7)
+        # Atribucion obligatoria de OpenStreetMap
+        text = "© OpenStreetMap contributors"
+        f = painter.font()
+        f.setPixelSize(11)
+        painter.setFont(f)
+        tw = painter.fontMetrics().horizontalAdvance(text) + 12
+        r = QRectF(self.width() - tw - 4, self.height() - 20, tw, 18)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(255, 255, 255, 200))
+        painter.drawRoundedRect(r, 4, 4)
+        painter.setPen(QColor("#333333"))
+        painter.drawText(r, Qt.AlignmentFlag.AlignCenter, text)
+
+    def mousePressEvent(self, event):
+        self._drag = (event.position(), self.cx, self.cy)
+        self.setCursor(Qt.CursorShape.ClosedHandCursor)
+
+    def mouseMoveEvent(self, event):
+        if self._drag:
+            p0, cx, cy = self._drag
+            d = event.position() - p0
+            self.cx, self.cy = cx - d.x(), cy - d.y()
+            self.update()
+
+    def mouseReleaseEvent(self, event):
+        self._drag = None
+        self.setCursor(Qt.CursorShape.OpenHandCursor)
+
+    def wheelEvent(self, event):
+        step = 1 if event.angleDelta().y() > 0 else -1
+        nz = max(2, min(18, self.zoom + step))
+        if nz == self.zoom:
+            return
+        pos = event.position()
+        wx = self.cx - self.width() / 2 + pos.x()
+        wy = self.cy - self.height() / 2 + pos.y()
+        f = 2 ** (nz - self.zoom)
+        self.zoom = nz
+        self.cx = wx * f - pos.x() + self.width() / 2
+        self.cy = wy * f - pos.y() + self.height() / 2
+        self.update()
+
+    def shutdown(self):
+        try:
+            self.pool.shutdown(wait=False, cancel_futures=True)
+        except Exception:
+            pass
+
+
+class GpsMapDialog(QDialog):
+    """Recorrido GPS de un video: mapa + distancia, velocidades y altura."""
+
+    def __init__(self, parent, lang, path, accent):
+        super().__init__(parent)
+        self.lang, self.path, self.accent = lang, path, accent
+        self.map = None
+        self.setWindowTitle(tr(lang, "gps_title", name=os.path.basename(path)))
+        self.resize(1000, 720)
+        self.setStyleSheet(f"""
+            QDialog {{ background: #1c1e29; }}
+            QLabel {{ color: #fff; background: transparent; }}
+            * {{ font-family: {FONT_STACK}; }}
+            QPushButton {{ background: rgba(255,255,255,0.08); color: #fff; border: 1px solid rgba(255,255,255,0.14);
+                          border-radius: 10px; padding: 8px 16px; font-weight: 600; }}
+            QPushButton:hover {{ background: rgba(255,255,255,0.16); }}
+        """)
+        self.lay = QVBoxLayout(self)
+        self.lay.setContentsMargins(22, 18, 22, 16)
+        self.lay.setSpacing(10)
+        title = QLabel(tr(lang, "gps_title", name=os.path.basename(path)))
+        title.setStyleSheet("font-size: 18px; font-weight: 800;")
+        self.lbl_stats = QLabel(tr(lang, "gps_reading"))
+        self.lbl_stats.setWordWrap(True)
+        self.lbl_stats.setStyleSheet(f"font-size: 13px; color: {accent};")
+        self.lay.addWidget(title)
+        self.lay.addWidget(self.lbl_stats)
+        self.map_slot = QVBoxLayout()
+        self.lay.addLayout(self.map_slot, 1)
+        foot = QHBoxLayout()
+        self.lbl_hint = QLabel(tr(lang, "gps_hint"))
+        self.lbl_hint.setStyleSheet("font-size: 11px; color: rgba(255,255,255,0.45);")
+        self.btn_osm = QPushButton(tr(lang, "gps_open_osm"))
+        self.btn_osm.hide()
+        close = QPushButton(tr(lang, "close_btn2"))
+        close.clicked.connect(self.accept)
+        foot.addWidget(self.lbl_hint)
+        foot.addStretch()
+        foot.addWidget(self.btn_osm)
+        foot.addWidget(close)
+        self.lay.addLayout(foot)
+        th = ScanThread(0, read_gopro_track, path)
+        th.done.connect(self._on_points)
+        th.start()
+
+    def _on_points(self, _t, st):
+        pts = st["points"] if st else None
+        if not pts:
+            self.lbl_stats.setText(tr(self.lang, "gps_none"))
+            self.lbl_stats.setStyleSheet("font-size: 13px; color: rgba(255,255,255,0.7);")
+            self.lbl_hint.hide()
+            return
+        duration = read_mp4_info(self.path).get("duration") or 0
+        if st:
+            dist = f"{st['dist'] / 1000:.1f} km" if st["dist"] >= 1000 else f"{st['dist']:.0f} m"
+            mins = int(duration // 60)
+            dur = f"{mins // 60} h {mins % 60:02d} min" if mins >= 60 else f"{mins} min"
+            self.lbl_stats.setText(tr(self.lang, "gps_stats", dist=dist, vmax=f"{st['vmax']:.0f}", vavg=f"{st['vavg']:.0f}",
+                                      amin=f"{st['amin']:.0f}", amax=f"{st['amax']:.0f}", dur=dur))
+        self.map = TileMapWidget(pts, self.accent, self)
+        self.map_slot.addWidget(self.map)
+        lat, lon = pts[len(pts) // 2][0], pts[len(pts) // 2][1]
+        self.btn_osm.clicked.connect(lambda: QDesktopServices.openUrl(
+            QUrl(f"https://www.openstreetmap.org/?mlat={lat:.5f}&mlon={lon:.5f}#map=14/{lat:.5f}/{lon:.5f}")))
+        self.btn_osm.show()
+
+    def done(self, r):
+        if self.map is not None:
+            self.map.shutdown()
+        super().done(r)
 
 
 def read_mp4_info(path):
@@ -11827,19 +12345,21 @@ class MainWindow(QWidget):
         source = last_src if last_src and os.path.isdir(last_src) else self.sync_page.sync_target_dir
         dest = self.config.get("backup_last_dest") or (dirs[0] if dirs else "")
         dlg = BackupDialog(self, self.lang, source, dest, self.config.get("accent_color", "#00f2fe"),
-                           remember_default=self.config.get("backup_last_remember", True))
+                           remember_default=self.config.get("backup_last_remember", True),
+                           verify_default=self.config.get("backup_last_verify", False))
         if not dlg.exec() or not dlg.dest:
             return
         # La proxima vez el dialogo arranca con lo mismo que se eligio ahora.
         self.config["backup_last_source"] = dlg.source
         self.config["backup_last_dest"] = dlg.dest
         self.config["backup_last_remember"] = dlg.remember()
+        self.config["backup_last_verify"] = dlg.chk_verify.isChecked()
         if dlg.remember() and not any(os.path.normcase(d) == os.path.normcase(dlg.dest) for d in dirs):
             dirs.append(dlg.dest)
             self.config["backup_dirs"] = dirs
         save_config(self.config)
         self.show_activity()
-        self.sync_page.start_backup(dlg.source, [dlg.dest])
+        self.sync_page.start_backup(dlg.source, [dlg.dest], verify=dlg.chk_verify.isChecked())
 
     def choose_language(self, new_lang):
         """Guarda el idioma elegido (asistente/dialogo) y traduce la app al momento."""
