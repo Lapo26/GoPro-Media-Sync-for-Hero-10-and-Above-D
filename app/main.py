@@ -35,7 +35,7 @@ except ImportError:
     winsound = None
 
 # PySide6
-from PySide6.QtCore import (Qt, QTimer, QThread, Signal, Slot, QRectF, QPointF, QUrl,
+from PySide6.QtCore import (Qt, QTimer, QThread, Signal, Slot, QRectF, QPointF, QPoint, QRect, QUrl,
                              QPropertyAnimation, QEasingCurve, Property, QEvent, QObject, QSize,
                              QStandardPaths, QParallelAnimationGroup, QDate)
 from PySide6.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
@@ -43,7 +43,8 @@ from PySide6.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout, 
                                QStackedWidget, QFrame, QFileDialog, QTabWidget,
                                QGridLayout, QScrollArea, QColorDialog, QGraphicsView, QGraphicsScene, QGraphicsPixmapItem,
                                QSlider, QGraphicsBlurEffect, QMenu, QAbstractButton,
-                               QGraphicsOpacityEffect, QLineEdit, QStackedLayout, QListWidget, QDateEdit, QProgressBar, QSystemTrayIcon)
+                               QGraphicsOpacityEffect, QLineEdit, QStackedLayout, QListWidget, QDateEdit, QProgressBar, QSystemTrayIcon,
+                               QAbstractScrollArea, QToolTip)
 from PySide6.QtGui import (QGuiApplication, QPixmap, QPainter, QColor, QPainterPath, QImage, 
                            QLinearGradient, QFont, QKeySequence, QShortcut, QRegion, QPen, QIcon, QImageReader)
 # Multimedia
@@ -5632,6 +5633,315 @@ def format_gallery_date_header(date_str, lang="de"):
     return f"{_WEEKDAYS_EN[dt.weekday()]}, {_MONTHS_EN[dt.month - 1]} {dt.day}, {dt.year}"
 
 
+# --- [ GALERIA VIRTUALIZADA ] ---
+#
+# Antes: un QLabel + QPixmap por cada archivo (2.700 widgets, ~1,6 GB de RAM a
+# 200 %, la interfaz se trababa al cargar y ~1 s al redimensionar). Ahora una
+# sola vista dibuja SOLO las filas visibles y pide las miniaturas de lo visible
+# (+1 pantalla de margen); guarda las ultimas ~240 en memoria.
+
+class _ThumbIO:
+    """Lectura/generacion de miniaturas (cache en disco), sin QThread: reutiliza
+    la logica de ThumbnailLoaderThread."""
+    CACHE_W, CACHE_H = ThumbnailLoaderThread.CACHE_W, ThumbnailLoaderThread.CACHE_H
+
+    @property
+    def CACHE_DIR(self):
+        return ThumbnailLoaderThread.CACHE_DIR
+
+    def __init__(self, kind, meta, lang):
+        self.kind, self.meta, self.lang = kind, meta or {}, lang
+
+    _cache_path = ThumbnailLoaderThread._cache_path
+    _load_cached = ThumbnailLoaderThread._load_cached
+    _load_raw = ThumbnailLoaderThread._load_raw
+    _read_video_frame = ThumbnailLoaderThread._read_video_frame
+    _damaged_image = ThumbnailLoaderThread._damaged_image
+
+
+class ThumbProvider(QObject):
+    """Carga miniaturas bajo demanda en hilos: primero la cache (rapido); si no
+    esta, muestra la miniatura EXIF y genera la nitida (con _DISK_LOCK para no
+    castigar el disco mecanico)."""
+    ready = Signal(str, QImage)
+
+    def __init__(self, kind, meta, lang, parent=None):
+        super().__init__(parent)
+        from concurrent.futures import ThreadPoolExecutor
+        self.io = _ThumbIO(kind, meta, lang)
+        self.kind = kind
+        self.pool = ThreadPoolExecutor(max_workers=4)
+        self.inflight = set()
+        self.generation = 0
+        self.dpr = screen_dpr()
+
+    def request(self, paths):
+        gen = self.generation
+        for path in paths:
+            if path not in self.inflight:
+                self.inflight.add(path)
+                self.pool.submit(self._load, path, gen)
+
+    def _cover(self, img):
+        cover = make_cover_thumbnail(img, THUMB_W, THUMB_H, dpr=self.dpr)
+        return draw_play_badge(cover) if self.kind == "video" else cover
+
+    def _load(self, path, gen):
+        try:
+            if gen != self.generation:          # ya se scrolleo a otro lado
+                self.inflight.discard(path)
+                return
+            if self.kind == "video" and is_broken_mp4(path):
+                # sin el icono de reproducir: un video danado no se puede abrir
+                self.ready.emit(path, make_cover_thumbnail(self.io._damaged_image(), THUMB_W, THUMB_H, dpr=self.dpr))
+                return
+            img = self.io._load_cached(path)
+            if img is None:
+                if self.kind != "video":
+                    quick = read_exif_thumbnail(path)
+                    if quick is not None and gen == self.generation:
+                        self.ready.emit(path + "\0quick", self._cover(quick))
+                if gen != self.generation:
+                    self.inflight.discard(path)
+                    return
+                with _DISK_LOCK:
+                    img = self.io._load_raw(path)   # genera y guarda en cache
+            self.ready.emit(path, self._cover(img) if img is not None and not img.isNull() else QImage())
+        except Exception:
+            self.ready.emit(path, QImage())
+
+    def shutdown(self):
+        self.generation += 1
+        try:
+            self.pool.shutdown(wait=False, cancel_futures=True)
+        except Exception:
+            pass
+
+
+class ThumbGridView(QAbstractScrollArea):
+    """Cuadricula virtual: encabezados de fecha + miniaturas, dibujando solo lo
+    visible. Senales: activated(ruta) con clic izquierdo, context(ruta, pos)."""
+    activated = Signal(str)
+    context = Signal(str, QPoint)
+    SP, HEADER_H = 18, 40
+    ROW_H = THUMB_H + 18
+    LRU_CAP = 240
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        from collections import OrderedDict
+        self.setFrameShape(QFrame.Shape.NoFrame)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setStyleSheet("QAbstractScrollArea { background: transparent; border: none; }")
+        self.viewport().setAutoFillBackground(False)
+        self.viewport().setMouseTracking(True)
+        self.files, self.dates, self.rows, self.row_ys = [], [], [], []
+        self.total_h = 0
+        self.cols = 3
+        self.lang = "es"
+        self.lru = OrderedDict()
+        self.missing = set()
+        self.provider = None
+        self.hover = None
+        self._press = None
+        self.header_font = QFont("Century Gothic")
+        self.header_font.setPixelSize(13)
+        self.header_font.setBold(True)
+        self.header_font.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, 1)
+        self.verticalScrollBar().valueChanged.connect(self._schedule_request)
+        self._req_timer = QTimer(self)
+        self._req_timer.setSingleShot(True)
+        self._req_timer.setInterval(0)
+        self._req_timer.timeout.connect(self._request_visible)
+
+    # ---- datos
+    def set_items(self, files, dates, meta, kind, lang):
+        if self.provider is not None:
+            self.provider.shutdown()
+        self.files, self.dates, self.lang = files, dates, lang
+        self.lru.clear()
+        self.missing.clear()
+        self.hover = None
+        self.provider = ThumbProvider(kind, meta, lang, self)
+        self.provider.ready.connect(self._on_ready)
+        self.verticalScrollBar().setValue(0)
+        self._relayout()
+
+    def loaded_count(self):
+        return len(self.lru)
+
+    def _columns(self):
+        return max(1, (self.viewport().width() + self.SP) // (THUMB_W + self.SP))
+
+    def _x0(self):
+        used = self.cols * (THUMB_W + self.SP) - self.SP
+        return max(0, (self.viewport().width() - used) // 2)
+
+    def _relayout(self):
+        self.cols = self._columns()
+        rows, y, cur, row = [], 0, None, None
+        for path, d in zip(self.files, self.dates):
+            if d != cur:
+                cur = d
+                rows.append((y, "h", format_gallery_date_header(d, self.lang)))
+                y += self.HEADER_H
+                row = None
+            if row is None or len(row) >= self.cols:
+                row = []
+                rows.append((y, "t", row))
+                y += self.ROW_H
+            row.append(path)
+        self.rows, self.total_h = rows, y
+        self.row_ys = [r[0] for r in rows]
+        self._update_scrollbar()
+        self._schedule_request()
+        self.viewport().update()
+
+    def _update_scrollbar(self):
+        sb = self.verticalScrollBar()
+        sb.setRange(0, max(0, self.total_h - self.viewport().height()))
+        sb.setPageStep(max(1, self.viewport().height()))
+        sb.setSingleStep(60)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if self.files and self._columns() != self.cols:
+            self._relayout()          # solo reacomoda: las miniaturas en memoria se reutilizan
+        else:
+            self._update_scrollbar()
+            self._schedule_request()
+
+    def _visible_rows(self, margin=0):
+        import bisect
+        top = self.verticalScrollBar().value() - margin
+        bottom = self.verticalScrollBar().value() + self.viewport().height() + margin
+        i = max(0, bisect.bisect_right(self.row_ys, top) - 1)
+        out = []
+        while i < len(self.rows) and self.rows[i][0] < bottom:
+            out.append(self.rows[i])
+            i += 1
+        return out
+
+    # ---- pedidos de miniaturas (primero lo visible, despues el margen)
+    def _schedule_request(self, *_):
+        self._req_timer.start()
+
+    def _request_visible(self):
+        if self.provider is None:
+            return
+        self.provider.generation += 1         # descarta pedidos viejos que no empezaron
+        self.provider.inflight.clear()
+        visible = [p for _, k, pl in self._visible_rows() if k == "t" for p in pl]
+        margin = [p for _, k, pl in self._visible_rows(self.viewport().height()) if k == "t" for p in pl]
+        want, seen = [], set()
+        for path in visible + margin:
+            if path not in seen and path not in self.lru and path not in self.missing:
+                seen.add(path)
+                want.append(path)
+        self.provider.request(want)
+
+    def _on_ready(self, key, img):
+        quick = key.endswith("\0quick")
+        path = key[:-6] if quick else key
+        if not quick:
+            self.provider.inflight.discard(path)
+        if img.isNull():
+            if not quick:
+                self.missing.add(path)
+            return
+        if quick and path in self.lru:
+            return
+        self.lru[path] = QPixmap.fromImage(img)
+        self.lru.move_to_end(path)
+        while len(self.lru) > self.LRU_CAP:
+            self.lru.popitem(last=False)
+        self.viewport().update()
+
+    # ---- dibujo
+    def paintEvent(self, event):
+        painter = QPainter(self.viewport())
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        off = self.verticalScrollBar().value()
+        x0 = self._x0()
+        for y, kind, payload in self._visible_rows():
+            yy = y - off
+            if kind == "h":
+                painter.setFont(self.header_font)
+                painter.setPen(QColor(255, 255, 255, 140))
+                painter.drawText(QRect(x0, yy + 6, self.viewport().width() - x0, self.HEADER_H - 6),
+                                 Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, payload)
+                continue
+            for c, path in enumerate(payload):
+                r = QRectF(x0 + c * (THUMB_W + self.SP), yy, THUMB_W, THUMB_H)
+                pix = self.lru.get(path)
+                clip = QPainterPath()
+                clip.addRoundedRect(r, 12, 12)
+                if pix is None:
+                    painter.fillPath(clip, QColor(255, 255, 255, 12))
+                else:
+                    painter.drawPixmap(int(r.x()), int(r.y()), pix)   # ya viene redondeada y a la escala real
+                hovered = path == self.hover
+                painter.setPen(QPen(QColor(255, 255, 255, 220 if hovered else 22), 2 if hovered else 1))
+                painter.drawPath(clip)
+        painter.end()
+
+    # ---- interaccion
+    def path_at(self, pos):
+        off = self.verticalScrollBar().value()
+        x0 = self._x0()
+        for y, kind, payload in self._visible_rows():
+            if kind == "t" and y - off <= pos.y() < y - off + THUMB_H:
+                rel = pos.x() - x0
+                c = rel // (THUMB_W + self.SP)
+                if rel >= 0 and 0 <= c < len(payload) and rel % (THUMB_W + self.SP) < THUMB_W:
+                    return payload[int(c)]
+        return None
+
+    def mouseMoveEvent(self, event):
+        h = self.path_at(event.position().toPoint())
+        if h != self.hover:
+            self.hover = h
+            self.viewport().setCursor(Qt.CursorShape.PointingHandCursor if h else Qt.CursorShape.ArrowCursor)
+            self.viewport().update()
+
+    def leaveEvent(self, event):
+        if self.hover is not None:
+            self.hover = None
+            self.viewport().update()
+        super().leaveEvent(event)
+
+    def mousePressEvent(self, event):
+        self._press = self.path_at(event.position().toPoint()) if event.button() == Qt.MouseButton.LeftButton else None
+        super().mousePressEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            path = self.path_at(event.position().toPoint())
+            if path and path == self._press:
+                self.activated.emit(path)
+        self._press = None
+        super().mouseReleaseEvent(event)
+
+    def contextMenuEvent(self, event):
+        path = self.path_at(event.pos())
+        if path:
+            self.context.emit(path, event.globalPos())
+
+    def viewportEvent(self, event):
+        if event.type() == QEvent.Type.ToolTip:
+            path = self.path_at(event.pos())
+            if path:
+                QToolTip.showText(event.globalPos(), path, self.viewport())
+            else:
+                QToolTip.hideText()
+            return True
+        return super().viewportEvent(event)
+
+    def shutdown(self):
+        if self.provider is not None:
+            self.provider.shutdown()
+
+
 class GalleryBase(QWidget):
     KIND = "picture"       # von Subklassen ueberschrieben: "video" oder "picture"
     EXTENSIONS = ()        # von Subklassen ueberschrieben
@@ -5643,15 +5953,6 @@ class GalleryBase(QWidget):
         self.col_count = 3
         self.loader_thread = None
         self._loaded_count = 0
-        self._cell_for_path = {}
-        # Las miniaturas se agregan a la cuadricula EN TANDAS (cada ~120 ms),
-        # no de a una: con miles de fotos, agregar una por una obligaba a
-        # recalcular/repintar toda la cuadricula cada vez (~1 miniatura/s).
-        self._pending_thumbs = []
-        self._thumb_widgets = {}
-        self._flush_timer = QTimer(self)
-        self._flush_timer.setInterval(120)
-        self._flush_timer.timeout.connect(self._flush_pending_thumbs)
         # Sortierreihenfolge: True = neueste zuerst (Standard), False = aelteste zuerst
         self.sort_newest_first = True
         outer = QVBoxLayout(self)
@@ -5705,29 +6006,13 @@ class GalleryBase(QWidget):
         outer.addWidget(self.lbl_loading)
         self.lbl_loading.hide()
 
-        self.scroll = QScrollArea()
-        self.scroll.setWidgetResizable(True)
-        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
-        self._relayout_timer = QTimer(self)
-        self._relayout_timer.setSingleShot(True)
-        self._relayout_timer.setInterval(250)
-        self._relayout_timer.timeout.connect(self._relayout_if_needed)
-        self.grid_host = QWidget()
-        self.grid_host.setStyleSheet(
-            "background: transparent;"
-            " ClickableThumbnail { border-radius: 12px; outline: none; border: 1px solid rgba(255,255,255,0.08); }"
-            " ClickableThumbnail:hover { border: 2px solid rgba(255,255,255,0.85); }")
-        self.grid = QGridLayout(self.grid_host)
-        self.grid.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter)
-        self.grid.setContentsMargins(0, 0, 0, 0)
-        self.grid.setHorizontalSpacing(18)
-        # Sin espaciado vertical automatico (Qt solo lo suma en filas con
-        # contenido, y la cuadricula crecia al ir llegando miniaturas): el
-        # espacio va incluido en la altura reservada de cada fila.
-        self.grid.setVerticalSpacing(0)
-        self.scroll.setWidget(self.grid_host)
-        outer.addWidget(self.scroll)
+        # Vista virtualizada (dibuja solo lo visible); "scroll" se mantiene como
+        # nombre por compatibilidad con el resto del codigo.
+        self.view = ThumbGridView(self)
+        self.view.activated.connect(lambda path: self.play_video(path) if self.KIND == "video" else self.open_image(path))
+        self.view.context.connect(self._show_context_menu)
+        self.scroll = self.view
+        outer.addWidget(self.view)
 
         self._empty_icon = empty_icon
         self.empty_lbl = QLabel(f"{empty_icon}\n{empty_text}")
@@ -5800,25 +6085,8 @@ class GalleryBase(QWidget):
         menu.addAction(tr(self.lang, "ctx_show_in_explorer"), lambda: show_in_explorer(path))
         menu.exec(global_pos)
 
-    def _columns_for_width(self):
-        """Cuantas miniaturas entran a lo ancho (siempre dejando lugar a la
-        barra de scroll vertical, asi nunca aparece la horizontal)."""
-        spacing = self.grid.horizontalSpacing() if hasattr(self, "grid") else 18
-        # Ancho total del area MENOS la barra vertical (una sola vez: antes se
-        # descontaba dos veces porque viewport() ya la excluye cuando se ve).
-        avail = self.scroll.width() - 2 * self.scroll.frameWidth() - self.scroll.verticalScrollBar().sizeHint().width() - 2
-        return max(1, (avail + spacing) // (THUMB_W + spacing))
-
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        self._relayout_timer.start()
-
     def _relayout_if_needed(self):
-        # Al redimensionar solo se REACOMODAN las miniaturas ya cargadas
-        # (antes se recargaban todas las imagenes).
-        if self._columns_for_width() != self.col_count and self.isVisible() and getattr(self, "_files", None):
-            self.col_count = self._columns_for_width()
-            self._layout_grid()
+        pass   # la vista virtualizada reacomoda sola al redimensionar
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -5827,8 +6095,6 @@ class GalleryBase(QWidget):
         if getattr(self, "_needs_refresh", False):
             self._needs_refresh = False
             QTimer.singleShot(0, self.refresh)
-        else:
-            self._relayout_timer.start()
 
     def _update_date_button_text(self, label=None):
         if label is None:
@@ -5993,163 +6259,18 @@ class GalleryBase(QWidget):
             return
 
         self.scroll.show()
-        self.col_count = self._columns_for_width()
-        self._loaded_count = 0
-        self.lbl_loading.setText(f"0 / {len(files)}")
-        self.lbl_loading.show()
-
-        # --- Datums-Trennzeilen + Grid-Positionen VORAB berechnen ---------
-        # Die Reihenfolge (und damit die Tages-Gruppen) steht schon fest,
-        # bevor die Thumbnails selbst asynchron/nacheinander vom
-        # Loader-Thread hereinkommen - deshalb koennen die Ueberschriften
-        # ("Heute", "Gestern", "Montag, 14. Juli 2025", ...) schon jetzt an
-        # der richtigen Stelle ins Grid gesetzt werden. Jedes Thumbnail
-        # bekommt seine feste (Zeile, Spalte) zugewiesen und wandert dort
-        # hinein, sobald es fertig geladen ist.
-        self._cell_for_path = {}
-        self._thumb_widgets = {}
-        self._loaded_paths = set()
-        self._headers = {}
-        self._files = files
-        self._layout_grid()
-
-        if self.loader_thread is not None:
-            self.loader_thread.stop()
-            self.loader_thread.wait(300)
-
-        self.loader_thread = ThumbnailLoaderThread(files, self.KIND, self, meta=getattr(self, "_meta", {}))
-        self.loader_thread.lang = self.lang
-        self._pending_total = len(files)
-        self.loader_thread.thumbnail_ready.connect(self._on_thumbnail_ready)
-        self.loader_thread.finished_loading.connect(self._on_loading_finished)
-        self.loader_thread.start()
-
-    def _on_thumbnail_ready(self, path, image):
-        self._pending_thumbs.append((path, image))
-        if not self._flush_timer.isActive():
-            self._flush_timer.start()
-
-    def _flush_pending_thumbs(self):
-        if not self._pending_thumbs:
-            self._flush_timer.stop()
-            return
-        batch, self._pending_thumbs = self._pending_thumbs, []
-        for path, image in batch:
-            self._add_thumbnail(path, image)
-        self.lbl_loading.setText(f"{self._loaded_count} / {self._pending_total}")
-
-    def _layout_grid(self):
-        """Ubica encabezados de fecha y miniaturas segun las columnas
-        actuales. Se usa al cargar y al redimensionar (reutiliza los widgets
-        ya creados: no vuelve a leer imagenes)."""
-        self.grid_host.setUpdatesEnabled(False)
-        try:
-            for r in range(self.grid.rowCount()):
-                self.grid.setRowMinimumHeight(r, 0)
-            for c in range(self.grid.columnCount()):
-                self.grid.setColumnMinimumWidth(c, 0)
-            while self.grid.count():
-                self.grid.takeAt(0)          # se quitan del layout, los widgets siguen vivos
-            for c in range(self.col_count):
-                self.grid.setColumnMinimumWidth(c, THUMB_W)
-            row = col = 0
-            current = None
-            for path in self._files:
-                date_str = self._date_for_path(path)
-                if date_str != current:
-                    if current is not None and col != 0:
-                        row += 1
-                    current = date_str
-                    header = self._headers.get(date_str)
-                    if header is None:
-                        header = QLabel(format_gallery_date_header(date_str, self.lang), self.grid_host)
-                        header.setStyleSheet("font-size: 13px; font-weight: 800; letter-spacing: 1px; "
-                                             "color: rgba(255,255,255,0.55); background: transparent; padding-top: 6px;")
-                        self._headers[date_str] = header
-                    self.grid.addWidget(header, row, 0, 1, self.col_count)
-                    self.grid.setRowMinimumHeight(row, 40)
-                    row += 1
-                    col = 0
-                self._cell_for_path[path] = (row, col)
-                # Lugar reservado (alto de fila): la cuadricula no se mueve al llegar imagenes
-                self.grid.setRowMinimumHeight(row, THUMB_H + 18)
-                w = self._thumb_widgets.get(path)
-                if w is not None:
-                    self.grid.addWidget(w, row, col, Qt.AlignmentFlag.AlignTop)
-                col += 1
-                if col >= self.col_count:
-                    col = 0
-                    row += 1
-        finally:
-            self.grid_host.setUpdatesEnabled(True)
-
-    def _placeholder_pixmap(self):
-        dpr = screen_dpr(self)
-        img = QImage(int(THUMB_W * dpr), int(THUMB_H * dpr), QImage.Format.Format_ARGB32_Premultiplied)
-        img.setDevicePixelRatio(dpr)
-        img.fill(Qt.GlobalColor.transparent)
-        p = QPainter(img)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        path = QPainterPath()
-        path.addRoundedRect(0, 0, THUMB_W, THUMB_H, 12, 12)
-        p.fillPath(path, QColor(255, 255, 255, 12))
-        p.end()
-        return QPixmap.fromImage(img)
-
-    def _make_thumb_widget(self, path, pix):
-        if self.KIND == "video":
-            return ClickableThumbnail(pix, lambda checked=False, p=path: self.play_video(p), tooltip=path,
-                                      on_context=lambda pos, p=path: self._show_context_menu(p, pos))
-        return ClickableThumbnail(pix, lambda checked=False, p=path: self.open_image(p), tooltip=path,
-                                  on_context=lambda pos, p=path: self._show_context_menu(p, pos))
-
-    def _add_thumbnail(self, path, image):
-        pix = QPixmap.fromImage(image)
-        existing = self._thumb_widgets.get(path)
-        if existing is not None:
-            existing.setPixmap(pix)   # solo cambia la imagen: la cuadricula no se mueve
-            if path not in self._loaded_paths:
-                self._loaded_paths.add(path)
-                self._loaded_count += 1
-            return
-        if self.KIND == "video":
-            lbl = ClickableThumbnail(pix, lambda checked=False, p=path: self.play_video(p), tooltip=path,
-                                     on_context=lambda pos, p=path: self._show_context_menu(p, pos))
-        else:
-            lbl = ClickableThumbnail(pix, lambda checked=False, p=path: self.open_image(p), tooltip=path,
-                                     on_context=lambda pos, p=path: self._show_context_menu(p, pos))
-        self._loaded_count += 1
-        self._thumb_widgets[path] = lbl
-        cell = self._cell_for_path.get(path)
-        if cell is not None:
-            r, c = cell
-            self.grid.addWidget(lbl, r, c, Qt.AlignmentFlag.AlignTop)
-
-    def _on_loading_finished(self):
-        self._flush_pending_thumbs()
-        self._flush_timer.stop()
         self.lbl_loading.hide()
-        if self._loaded_count == 0:
-            self.show_empty()
+        self._loaded_count = 0
+        self._pending_total = len(files)
+        self.view.set_items(files, [self._date_for_path(p) for p in files],
+                            getattr(self, "_meta", {}), self.KIND, self.lang)
 
     def refresh(self):
-        """Leert das Grid und laedt die Dateien neu (z.B. nach einem Sync oder Ordnerwechsel)."""
+        """Vuelve a listar la carpeta y redibuja (tras un sync, cambio de carpeta,
+        orden o filtro)."""
         if not self.isVisible():
             self._needs_refresh = True    # se recarga al abrir la galeria
             return
-        self._pending_thumbs = []
-        self._thumb_widgets = {}
-        self._flush_timer.stop()
-        if self.loader_thread is not None:
-            self.loader_thread.stop()
-            self.loader_thread.wait(300)
-        for r in range(self.grid.rowCount()):
-            self.grid.setRowMinimumHeight(r, 0)    # limpiar reservas de la carga anterior
-        while self.grid.count():
-            item = self.grid.takeAt(0)
-            w = item.widget()
-            if w:
-                w.deleteLater()
         self.empty_lbl.hide()
         self.scroll.show()
         self.populate()
