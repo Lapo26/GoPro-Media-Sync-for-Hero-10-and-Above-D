@@ -3602,6 +3602,7 @@ class SyncWorkerThread(QThread):
         self.mvhd_local = bool(GOPRO_MODELS.get(self.model or "", {}).get("mvhd_local"))
         self.device_name = LAST_DEVICE_NAME.get("name")
         self._cancel = False
+        self._wpd = None          # conexion WPD con la camara (None = sin probar, False = no disponible)
         self.error_list = []     # [(archivo, motivo)] para mostrar en Actividad
         # Importacion manual (menu "Importar SD / carpeta"): fuente elegida por
         # el usuario; nunca se borra nada del origen.
@@ -3861,6 +3862,49 @@ class SyncWorkerThread(QThread):
         if errors:
             msg += tr(self.lang, "sync_errors_suffix", errors=errors)
         self.finished_sync.emit(errors == 0, msg, result_data)
+
+    def _copy_via_shell(self, path_components, name, dest_name, idx, total, size, dest_path):
+        copy_script = build_single_copy_script(path_components, name, self.target_dir, dest_name)
+        return self._run_copy_with_progress(copy_script, idx, total, name, size, dest_path)
+
+    def _close_wpd(self):
+        if self._wpd:
+            self._wpd.close()
+        self._wpd = None
+
+    def _copy_via_wpd(self, name, folder, idx, total, size, dest_path):
+        """Copia un archivo de la camara por WPD. Devuelve el resultado
+        ({"ok": True} / {"error": ...}) o None para usar la copia del Explorador."""
+        if self._wpd is False:
+            return None
+        if self._wpd is None:
+            cam = WpdCameraSession("HERO")
+            if not cam.open(stop=lambda: self._cancel):
+                cam.close()
+                self._wpd = False
+                print("[Sync] WPD no disponible: se usa la copia del Explorador")
+                return None
+            self._wpd = cam
+        last = {"pct": -1.0, "t": 0.0}
+
+        def progress(done):
+            if size > 0:
+                pct = min(100.0, done * 100.0 / size)
+                now = time.monotonic()
+                if pct - last["pct"] >= 0.5 or now - last["t"] >= 0.3:
+                    last["pct"], last["t"] = pct, now
+                    self.progress.emit(idx, total, name, pct)
+        try:
+            ok = self._wpd.copy_to(name, dest_path, folder=folder, progress=progress, cancel=lambda: self._cancel)
+        except WpdError as e:
+            print(f"[Sync] WPD: {name}: {e} -> copia del Explorador")
+            return None
+        except Exception as e:
+            print(f"[Sync] WPD: {name}: {e}")
+            return {"error": "timeout" if _wpd_is_timeout(e) else str(e)}
+        if not ok:
+            return {"error": "cancelled"}
+        return {"ok": True}
 
     def _run_copy_with_progress(self, copy_script, idx, total, name, expected_size, dest_path):
         """Startet das Kopier-Skript im Hintergrund und ermittelt den
@@ -4158,17 +4202,17 @@ class SyncWorkerThread(QThread):
                         break
                     counter += 1
 
-            copy_script = build_single_copy_script(path_components, name, self.target_dir, dest_name)
-            # WICHTIG: Frueher wurde hier subprocess.run() (blockierend)
-            # verwendet - Python bekam die komplette PowerShell-Ausgabe
-            # (inkl. Kopier-Fortschritt) daher immer erst NACH Abschluss
-            # der kompletten Datei zu Gesicht. Der Sync-Button sprang
-            # dadurch nur file-weise (idx/total), aber NICHT synchron zum
-            # tatsaechlichen Uebertragungsfortschritt der einzelnen Datei.
-            # _run_copy_with_progress() liest die Ausgabe stattdessen
-            # ZEILENWEISE, WAEHREND das Skript noch laeuft, und meldet so
-            # den echten, byte-genauen Fortschritt DIESER Datei live weiter.
-            copy_result, timed_out = self._run_copy_with_progress(copy_script, idx, total, name, size, root_dest_path)
+            # Primero por WPD: directo, sin la ventana "Copiando..." de Windows
+            # (el Explorador la muestra siempre con la camara) y con progreso real.
+            copy_result = self._copy_via_wpd(name, path_components[-1] if path_components else None,
+                                             idx, total, size, root_dest_path)
+            if self._cancel:
+                break
+            if copy_result is not None:
+                timed_out = False
+            else:
+                copy_result, timed_out = self._copy_via_shell(path_components, name, dest_name, idx, total, size,
+                                                              root_dest_path)
             if self._cancel:
                 break
             if timed_out:
@@ -4241,6 +4285,7 @@ class SyncWorkerThread(QThread):
         # --- Phase 4: JETZT ERST, nach Abschluss ALLER Kopien, gesammelt
         # von der Kamera loeschen (ein Bestaetigungsdialog pro Unterordner
         # statt einer pro Datei) ---
+        self._close_wpd()
         deleted = 0
         if self._cancel:
             self._cancelled_result(copied, total)
@@ -8940,10 +8985,222 @@ class CameraListThread(QThread):
             self.listed.emit(None)
 
 
+class WpdError(Exception):
+    pass
+
+
+def _wpd_is_timeout(exc):
+    hr = getattr(exc, "hresult", None)
+    if hr is None and getattr(exc, "args", None):
+        hr = exc.args[0]
+    return hr in (-2147023436, 0x800705B4)       # ERROR_TIMEOUT: la camara no contesta
+
+
+class WpdCameraSession:
+    """Conexion directa con la camara por WPD (el protocolo MTP), sin pasar por
+    el Explorador: sin ventanas de Windows y con progreso exacto por bytes.
+    Usar siempre desde UN solo hilo (el que llamo a open())."""
+    CLIENT_FMT = "{204D9F0C-2292-4080-9F42-40664E70F859}"
+
+    def __init__(self, name_match="HERO"):
+        self.name_match = name_match.upper()
+        self.dev = None
+        self.objects = {}            # NOMBRE -> objectID
+        self.by_folder = {}          # (CARPETA, NOMBRE) -> objectID
+        self._com = False
+
+    # ---- conexion
+    def open(self, stop=lambda: False, open_attempts=6, enum_attempts=8):
+        """Abre la camara y recorre sus archivos. Devuelve True si quedo lista."""
+        try:
+            import comtypes
+            import comtypes.client
+            from comtypes import GUID
+            from ctypes import POINTER, byref, c_ulong, cast
+        except Exception as e:
+            print("[Camara WPD] falta comtypes:", e)
+            return False
+        self.comtypes, self.GUID, self.POINTER, self.byref, self.c_ulong, self.cast = (
+            comtypes, GUID, POINTER, byref, c_ulong, cast)
+        comtypes.CoInitialize()
+        self._com = True
+        try:
+            self.api, self.types = _wpd_modules()
+            self.k_friendly = self._pkey("{26D4979A-E643-4626-9E2B-736DC0C92FDC}", 12)
+            self.k_name = self._pkey("{EF6B490D-5CD8-437A-AFFC-DA8B60EE4A3C}", 12)
+            self.k_thumb = self._pkey("{C7C407BA-98FA-46B5-9960-23FEC124CFDE}", 0)
+            self.k_data = self._pkey("{E81E79BE-34F0-41BF-B53F-F1A06AE87842}", 0)
+            mgr = comtypes.client.CreateObject(GUID("{0af10cec-2ecd-4b92-9581-34f6ae0637f3}"),
+                                               interface=self.api.IPortableDeviceManager)
+            for _ in range(open_attempts):          # la camara puede estar ocupada un momento
+                if stop():
+                    return False
+                self.dev = self._find_device(mgr)
+                if self.dev is not None:
+                    break
+                time.sleep(1.0)
+            if self.dev is None:
+                print("[Camara WPD] no se pudo abrir la camara")
+                return False
+            content = self.dev.Content()
+            self.props = content.Properties()
+            self.res = content.Transfer()
+            self._content = content
+            for attempt in range(enum_attempts):    # recien conectada contesta "ocupada" un rato
+                try:
+                    self._enumerate(stop)
+                    return True
+                except Exception as e:
+                    if stop() or attempt == enum_attempts - 1:
+                        raise
+                    print("[Camara WPD] ocupada, reintento:", e)
+                    time.sleep(3.0)
+        except Exception as e:
+            print("[Camara WPD]", e)
+            return False
+        return False
+
+    def close(self):
+        try:
+            if self.dev is not None:
+                self.dev.Close()
+        except Exception:
+            pass
+        self.dev = None
+        if self._com:
+            self._com = False
+            try:
+                self.comtypes.CoUninitialize()
+            except Exception:
+                pass
+
+    def _pkey(self, fmt, pid, lib=None):
+        k = (lib or self.api)._tagpropertykey()
+        k.fmtid = self.GUID(fmt)
+        k.pid = pid
+        return k
+
+    def _find_device(self, mgr):
+        c, byref, cast, POINTER = self.comtypes, self.byref, self.cast, self.POINTER
+        mgr.RefreshDeviceList()
+        cnt = self.c_ulong(0)
+        mgr._IPortableDeviceManager__com_GetDevices(None, byref(cnt))
+        if not cnt.value:
+            return None
+        arr = (c.c_wchar_p * cnt.value)()
+        mgr._IPortableDeviceManager__com_GetDevices(cast(arr, POINTER(c.c_wchar_p)), byref(cnt))
+        for did in list(arr):
+            d = c.client.CreateObject(self.GUID("{728a21c5-3d9e-48d7-9810-864848f0f404}"),
+                                      interface=self.api.IPortableDevice)
+            cv = c.client.CreateObject(self.GUID("{0c15d503-d017-47ce-9016-7b3f978721cc}"),
+                                       interface=self.types.IPortableDeviceValues)
+            cv.SetStringValue(byref(self._pkey(self.CLIENT_FMT, 2, self.types)), "GoPro Sync")
+            for pid, val in ((3, 1), (4, 0), (5, 0), (9, 0x80000000)):   # 9 = solo lectura
+                cv.SetUnsignedIntegerValue(byref(self._pkey(self.CLIENT_FMT, pid, self.types)), val)
+            try:
+                d.Open(did, cv)
+                name = d.Content().Properties().GetValues("DEVICE", None).GetStringValue(byref(self.k_friendly))
+            except Exception:
+                continue
+            if self.name_match in (name or "").upper():
+                return d
+            d.Close()
+        return None
+
+    def _children(self, oid):
+        c, byref = self.comtypes, self.byref
+        out = []
+        enum = self._content.EnumObjects(0, oid, None)
+        while True:
+            ids = (c.c_wchar_p * 64)()
+            fetched = self.c_ulong(0)
+            enum._IEnumPortableDeviceObjectIDs__com_Next(64, self.cast(ids, self.POINTER(c.c_wchar_p)), byref(fetched))
+            if not fetched.value:
+                break
+            out += [ids[i] for i in range(fetched.value)]
+        return out
+
+    def _enumerate(self, stop):
+        objects, by_folder = {}, {}
+        stack = [("DEVICE", "")]
+        while stack and not stop():
+            oid, folder = stack.pop()
+            for ch in self._children(oid):
+                try:
+                    n = self.props.GetValues(ch, None).GetStringValue(self.byref(self.k_name)) or ""
+                except Exception:
+                    n = ""
+                if "." in n:
+                    objects[n.upper()] = ch
+                    by_folder[(folder.upper(), n.upper())] = ch
+                else:
+                    stack.append((ch, n))
+        self.objects, self.by_folder = objects, by_folder
+
+    def object_id(self, name, folder=None):
+        if folder:
+            oid = self.by_folder.get((folder.upper(), name.upper()))
+            if oid is not None:
+                return oid
+        return self.objects.get(name.upper())
+
+    # ---- lectura
+    def _stream(self, oid, key):
+        r = self.res.GetStream(oid, self.byref(key), 0, 0)
+        cand = list(r) if isinstance(r, (list, tuple)) else [r]
+        st = next((x for x in cand if hasattr(x, "RemoteRead")), None)
+        if st is None:
+            raise WpdError("sin stream")
+        return st
+
+    def thumbnail(self, name):
+        oid = self.object_id(name)
+        if oid is None:
+            raise WpdError("no esta en la camara")
+        st = self._stream(oid, self.k_thumb)
+        data = []
+        while True:
+            buf, got = st.RemoteRead(65536)
+            if not got:
+                break
+            data.append(bytes(buf[:got]))
+        return b"".join(data)
+
+    def copy_to(self, name, dest, folder=None, progress=None, cancel=lambda: False, chunk=1024 * 1024):
+        """Copia el archivo de la camara a 'dest' (via .part). progress(bytes).
+        Devuelve False si se cancelo. Lanza excepcion si fallo."""
+        oid = self.object_id(name, folder)
+        if oid is None:
+            raise WpdError("no esta en la camara")
+        part = dest + ".part"
+        done = 0
+        st = self._stream(oid, self.k_data)
+        try:
+            with open(part, "wb") as f:
+                while True:
+                    if cancel():
+                        return False
+                    buf, got = st.RemoteRead(chunk)
+                    if not got:
+                        break
+                    f.write(bytes(buf[:got]))
+                    done += got
+                    if progress:
+                        progress(done)
+            os.replace(part, dest)
+            return True
+        finally:
+            del st                         # cerrar el stream prolijo (libera la lectura en la camara)
+            if os.path.exists(part):
+                try:
+                    os.remove(part)
+                except OSError:
+                    pass
+
+
 class WpdCameraWorker(QThread):
-    """Habla con la camara por WPD (el protocolo MTP) en su propio hilo:
-    miniaturas de los archivos (las da la camara, unos KB, sin copiar nada) y
-    copias puntuales para la vista previa."""
+    """Lector de la galeria de la camara en su propio hilo: miniaturas (las da
+    la camara, unos KB, sin copiar nada) y copias puntuales para la vista previa."""
     thumb_ready = Signal(str, QImage)    # nombre, miniatura (nula si fallo)
     file_ready = Signal(str, str)        # nombre, ruta local ("" si fallo)
     names_ready = Signal(object)         # conjunto de nombres de la camara
@@ -8951,7 +9208,7 @@ class WpdCameraWorker(QThread):
 
     def __init__(self, name_match="HERO", parent=None):
         super().__init__(parent)
-        self.name_match = name_match.upper()
+        self.name_match = name_match
         self._lock = threading.Lock()
         self._event = threading.Event()
         self._thumbs = []
@@ -8982,125 +9239,20 @@ class WpdCameraWorker(QThread):
         self._event.set()
 
     def _note_error(self, exc):
-        hr = getattr(exc, "hresult", None) or (exc.args[0] if getattr(exc, "args", None) else None)
-        if hr in (-2147023436, 0x800705B4):       # ERROR_TIMEOUT: la camara no contesta
+        if _wpd_is_timeout(exc):
             self._timeouts += 1
             if self._timeouts >= 3 and not self.dead:
                 self.dead = True
                 print("[Camara WPD] la camara no responde")
                 self.not_responding.emit()
 
-    def _open_device(self, comtypes, GUID, POINTER, byref, c_ulong, cast, api, types, mgr, pkey, k_friendly):
-        mgr.RefreshDeviceList()
-        cnt = c_ulong(0)
-        mgr._IPortableDeviceManager__com_GetDevices(None, byref(cnt))
-        arr = (comtypes.c_wchar_p * cnt.value)()
-        mgr._IPortableDeviceManager__com_GetDevices(cast(arr, POINTER(comtypes.c_wchar_p)), byref(cnt))
-        client_fmt = "{204D9F0C-2292-4080-9F42-40664E70F859}"
-        for did in list(arr):
-            d = comtypes.client.CreateObject(GUID("{728a21c5-3d9e-48d7-9810-864848f0f404}"), interface=api.IPortableDevice)
-            cv = comtypes.client.CreateObject(GUID("{0c15d503-d017-47ce-9016-7b3f978721cc}"),
-                                              interface=types.IPortableDeviceValues)
-            cv.SetStringValue(byref(pkey(client_fmt, 2, types)), "GoPro Sync")
-            for pid, val in ((3, 1), (4, 0), (5, 0), (9, 0x80000000)):
-                cv.SetUnsignedIntegerValue(byref(pkey(client_fmt, pid, types)), val)
-            try:
-                d.Open(did, cv)
-                name = d.Content().Properties().GetValues("DEVICE", None).GetStringValue(byref(k_friendly))
-            except Exception:
-                continue
-            if self.name_match in (name or "").upper():
-                return d
-            d.Close()
-        return None
-
     def run(self):
+        cam = WpdCameraSession(self.name_match)
         try:
-            import comtypes
-            import comtypes.client
-            from comtypes import GUID
-            from ctypes import POINTER, byref, c_ulong, cast
-        except Exception as e:
-            print("[Camara WPD] falta comtypes:", e)
-            return
-        comtypes.CoInitialize()
-        dev = None
-        try:
-            api, types = _wpd_modules()
-
-            def pkey(fmt, pid, lib=None):
-                k = (lib or api)._tagpropertykey()
-                k.fmtid = GUID(fmt)
-                k.pid = pid
-                return k
-            k_friendly = pkey("{26D4979A-E643-4626-9E2B-736DC0C92FDC}", 12)
-            k_name = pkey("{EF6B490D-5CD8-437A-AFFC-DA8B60EE4A3C}", 12)
-            k_thumb = pkey("{C7C407BA-98FA-46B5-9960-23FEC124CFDE}", 0)
-            k_data = pkey("{E81E79BE-34F0-41BF-B53F-F1A06AE87842}", 0)
-            mgr = comtypes.client.CreateObject(GUID("{0af10cec-2ecd-4b92-9581-34f6ae0637f3}"),
-                                               interface=api.IPortableDeviceManager)
-            for attempt in range(6):          # la camara puede estar ocupada un momento
-                if self._stop:
-                    return
-                dev = self._open_device(comtypes, GUID, POINTER, byref, c_ulong, cast, api, types, mgr, pkey, k_friendly)
-                if dev is not None:
-                    break
-                time.sleep(1.0)
-            if dev is None:
-                print("[Camara WPD] no se pudo abrir la camara")
+            if not cam.open(stop=lambda: self._stop):
                 return
-            content = dev.Content()
-            props = content.Properties()
-            res = content.Transfer()
-
-            def children(oid):
-                out = []
-                enum = content.EnumObjects(0, oid, None)
-                while True:
-                    ids = (comtypes.c_wchar_p * 64)()
-                    fetched = c_ulong(0)
-                    enum._IEnumPortableDeviceObjectIDs__com_Next(64, cast(ids, POINTER(comtypes.c_wchar_p)), byref(fetched))
-                    if not fetched.value:
-                        break
-                    out += [ids[i] for i in range(fetched.value)]
-                return out
-
-            for attempt in range(8):          # recien conectada contesta "ocupada" un rato
-                try:
-                    found = {}
-                    stack = ["DEVICE"]
-                    while stack and not self._stop:
-                        oid = stack.pop()
-                        for c in children(oid):
-                            try:
-                                n = props.GetValues(c, None).GetStringValue(byref(k_name)) or ""
-                            except Exception:
-                                n = ""
-                            if "." in n:
-                                found[n.upper()] = c
-                            else:
-                                stack.append(c)
-                    self.objects = found
-                    break
-                except Exception as e:
-                    if self._stop or attempt == 7:
-                        raise
-                    print("[Camara WPD] ocupada, reintento:", e)
-                    time.sleep(3.0)
-            self.names_ready.emit(set(self.objects))
-
-            def read_stream(oid, key, chunk):
-                r = res.GetStream(oid, byref(key), 0, 0)
-                cand = list(r) if isinstance(r, (list, tuple)) else [r]
-                st = next((x for x in cand if hasattr(x, "RemoteRead")), None)
-                if st is None:
-                    raise RuntimeError("sin stream")
-                while True:
-                    buf, got = st.RemoteRead(chunk)
-                    if not got:
-                        break
-                    yield bytes(buf[:got])
-
+            self.objects = cam.objects
+            self.names_ready.emit(set(cam.objects))
             while not self._stop:
                 self._event.wait(0.5)
                 self._event.clear()
@@ -9118,48 +9270,27 @@ class WpdCameraWorker(QThread):
                         continue
                     if job[0] == "file":
                         name, dest = job[1], job[2]
-                        oid = self.objects.get(name.upper())
                         try:
-                            if oid is None:
-                                raise RuntimeError("no esta en la camara")
-                            with open(dest + ".part", "wb") as f:
-                                # sin cortar a mitad: una lectura MTP abandonada traba la camara
-                                for blk in read_stream(oid, k_data, 1024 * 1024):
-                                    f.write(blk)
-                            os.replace(dest + ".part", dest)
+                            # sin cancelar a mitad: la vista previa es chica y termina sola
+                            cam.copy_to(name, dest)
                             self._timeouts = 0
                             self.file_ready.emit(name, dest)
                         except Exception as e:
                             self._note_error(e)
-                            try:
-                                os.remove(dest + ".part")
-                            except OSError:
-                                pass
                             self.file_ready.emit(name, "")
                     else:
                         name = job[1]
-                        oid = self.objects.get(name.upper())
                         img = QImage()
-                        if oid is not None:
-                            try:
-                                img = QImage.fromData(b"".join(read_stream(oid, k_thumb, 65536)))
-                                self._timeouts = 0
-                            except Exception as e:
-                                self._note_error(e)
-                                img = QImage()
+                        try:
+                            img = QImage.fromData(cam.thumbnail(name))
+                            self._timeouts = 0
+                        except Exception as e:
+                            self._note_error(e)
                         self.thumb_ready.emit(name, img)
         except Exception as e:
             print("[Camara WPD]", e)
         finally:
-            try:
-                if dev is not None:
-                    dev.Close()
-            except Exception:
-                pass
-            try:
-                comtypes.CoUninitialize()
-            except Exception:
-                pass
+            cam.close()
 
 
 class CameraThumbAdapter(QObject):
