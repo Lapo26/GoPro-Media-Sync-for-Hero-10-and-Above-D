@@ -9,7 +9,7 @@ VERSION=$(sed -n 's/^APP_VERSION = "\(.*\)"/\1/p' app/main.py)
 OS=$(uname -s)
 echo "== GoPro Sync $VERSION ($OS) =="
 
-"$PY" -m pip install --disable-pip-version-check -q -r app/requirements.txt pyinstaller pillow
+"$PY" -m pip install --disable-pip-version-check -q --upgrade -r app/requirements.txt -r requirements-dev.txt pillow
 rm -rf build dist
 
 # libgphoto2 carga sus modulos (camlibs/iolibs) en tiempo de ejecucion y estos

@@ -29,7 +29,7 @@ Write-Host "== GoPro Sync $Version ==" -ForegroundColor Cyan
 
 if (-not $SkipDeps) {
     Write-Host "-> Instalando dependencias de build"
-    & $Python -m pip install --disable-pip-version-check -q -r app\requirements.txt pyinstaller
+    & $Python -m pip install --disable-pip-version-check -q --upgrade -r app\requirements.txt -r requirements-dev.txt
     if ($LASTEXITCODE -ne 0) { throw "pip install fallo" }
 }
 
