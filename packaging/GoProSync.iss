@@ -53,10 +53,12 @@ Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs 
 [InstallDelete]
 ; Limpia los archivos de la version anterior (PyInstaller cambia nombres entre versiones).
 Type: filesandordirs; Name: "{app}\_internal"
+; Versiones anteriores ponian el acceso dentro de una carpeta "GoPro Sync" del menu Inicio.
+Type: filesandordirs; Name: "{autoprograms}\{#AppName}"
 
 [Icons]
-Name: "{group}\{#AppName}"; Filename: "{app}\{#AppExe}"
-Name: "{group}\{cm:UninstallProgram,{#AppName}}"; Filename: "{uninstallexe}"
+; Directo en el menu Inicio (no dentro de una carpeta). Para desinstalar: Configuracion > Aplicaciones.
+Name: "{autoprograms}\{#AppName}"; Filename: "{app}\{#AppExe}"
 Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppExe}"; Tasks: desktopicon
 
 [Run]
