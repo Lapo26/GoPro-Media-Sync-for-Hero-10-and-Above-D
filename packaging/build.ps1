@@ -39,6 +39,7 @@ Remove-Item -Recurse -Force build, dist -ErrorAction SilentlyContinue
     --name GoProSync `
     --icon "app\assets\app_icon.ico" `
     --add-data "app\assets;assets" `
+    --collect-data imageio_ffmpeg `
     --exclude-module tkinter `
     --exclude-module unittest `
     --exclude-module pydoc `

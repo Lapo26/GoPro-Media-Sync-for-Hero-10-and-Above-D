@@ -1,9 +1,10 @@
 # GoPro Sync: HERO5, tarjeta SD y respaldos
 
-Reemplazo de **GoPro Quik for desktop**: conectas la cámara o la tarjeta y la
-app copia fotos y videos a tu PC, ordenados en carpetas `AAAA-MM-DD` según la
-fecha de captura, sin duplicar lo que ya tenías. También puede copiar después
-esa carpeta a uno o varios discos externos.
+Reemplazo de **GoPro Quik for desktop** para Windows. Conectás la cámara o la
+tarjeta y la app copia fotos y videos a tu PC, ordenados en carpetas
+`AAAA-MM-DD` según la fecha de grabación, sin duplicar lo que ya tenías.
+Después los podés respaldar en uno o varios discos externos, ver en una
+galería, unir los videos partidos, ver el recorrido GPS y más.
 
 Fork de [JelloC19/GoPro-Media-Sync-for-Hero-10-and-Above-D](https://github.com/JelloC19/GoPro-Media-Sync-for-Hero-10-and-Above-D)
 (ver [Proyecto original](#proyecto-original)).
@@ -12,36 +13,65 @@ Fork de [JelloC19/GoPro-Media-Sync-for-Hero-10-and-Above-D](https://github.com/J
 
 En **[Releases](https://github.com/Lapo26/GoPro-Media-Sync-for-Hero-10-and-Above-D/releases/latest)**:
 
-- `GoProSync-Setup-X.Y.Z.exe`: el instalador. No pide permisos de administrador y crea accesos directos. Para actualizar, instala la nueva versión encima.
-- `GoProSync-X.Y.Z-portable.zip`: la versión portable. Se descomprime y se ejecuta `GoProSync.exe`.
+- `GoProSync-Setup-X.Y.Z.exe`: el **instalador**. No pide permisos de administrador, agrega GoPro Sync al menú Inicio, ofrece crear el acceso directo en el escritorio y queda en *Aplicaciones* de Windows con su desinstalador.
+- `GoProSync-X.Y.Z-portable.zip`: la versión **portable**. Se descomprime y se ejecuta `GoProSync.exe`.
+
+**Actualizaciones:** la app busca versiones nuevas al iniciar. Si hay una, aparece **Actualizar a X.Y.Z** en el menú lateral y se instala con un clic. Se puede desactivar en *Ajustes*.
 
 La configuración y la caché de miniaturas se guardan en `%APPDATA%\GoProSyncPro` y se conservan entre versiones.
 
-## Qué agrega este fork
+## Funciones
+
+### Copiar desde la cámara o la tarjeta
 
 | Función | Detalle |
 |---|---|
-| **GoPro HERO5 (Black/Session) por USB** | Se detecta como `HERO5 Black` en "Este equipo" (MTP). La fecha de los MP4 se interpreta en hora local (la HERO5 no guarda UTC), así que los videos grabados de noche no terminan en la carpeta del día equivocado. |
-| **Sincronizar desde la tarjeta microSD** | Si conectas la tarjeta con un lector, se detecta sola (`DCIM\100GOPRO`…) y el modelo se lee de `MISC\version.txt`. La copia va directo por el sistema de archivos (mucho más rápida y estable que MTP) y **conserva los atributos**: fechas de creación, modificación y acceso. Si están la cámara por USB y la tarjeta a la vez, tiene prioridad la cámara. |
-| **Carpetas por fecha como Quik** | `D:\GoPro\2017-07-14\GOPR0001.MP4`. Lo que ya existe con el mismo nombre y tamaño (en cualquier subcarpeta) se salta, así que puedes apuntar a tu carpeta antigua de Quik. |
-| **Fotos RAW** | Incluye `.GPR` (RAW de HERO5 Black y posteriores). |
-| **Respaldo a discos externos** | En *Ajustes → Ubicación → Respaldo* agregas una o varias carpetas (p. ej. `E:\Respaldo GoPro`). Después de cada sync, o con **Respaldar ahora**, la carpeta local se copia de forma incremental: solo lo nuevo o cambiado, con las fechas conservadas. **En el respaldo nunca se borra nada**; los discos que no estén conectados se saltan y se avisa. |
-| **Borrar de la cámara/tarjeta** | Si está activado, solo se borra lo que ya está copiado y verificado (mismo tamaño). En la SD también se eliminan los `.LRV`/`.THM` que lo acompañan. |
-| **Idiomas** | Español, inglés y alemán. Al primer inicio se elige el idioma (viene preseleccionado el de Windows); se cambia en *Ajustes → Sistema*. |
-| **Pantallas 4K / escaladas** | Logo, miniaturas, fondo y fotogramas se generan a la resolución real de la pantalla: nítidos con Windows al 150-200 %. Ícono propio legible en todos los tamaños (`packaging/make_icon.py`). |
-| **Rendimiento** | Caché de miniaturas: abrir una galería con miles de fotos pasa de minutos a segundos. La detección usa un PowerShell persistente (~1100 ms → ~170 ms por consulta). Hay menos sondeo en segundo plano y se pausa durante la copia. |
+| **GoPro HERO5 por USB** | Detecta la cámara (`HERO5 Black`), muestra la batería y el espacio libre, y copia directamente por MTP (WPD), sin la ventana "Copiando…" de Windows y con progreso real. |
+| **Galería de la cámara** | *Cámara → Ver archivos de la cámara*: las miniaturas de lo que hay en la cámara, con ✓ en lo ya copiado y **NUEVO** en lo que falta. Elegís uno o varios y **Sincronizar seleccionados**. Clic = vista previa sin copiar. |
+| **Importar SD / carpeta** | Desde un lector de tarjetas o cualquier carpeta. **Elegir archivos…** muestra la misma grilla para importar solo lo que marques. Conserva las fechas de creación, modificación y acceso. |
+| **Carpetas por fecha como Quik** | `D:\GoPro\2017-07-14\HERO5 Black 1\GOPR0001.MP4`. Lo que ya existe con el mismo nombre y tamaño, en cualquier subcarpeta (incluidas las copias `_1`), se saltea; podés apuntar a tu carpeta antigua de Quik. |
+| **Conteo real** | El progreso cuenta solo lo que falta copiar ("1 de 15", no "1 de 177"); lo que ya estaba se informa aparte. |
+| **Robusta** | Copia a `.part` y renombra al terminar, forzando la escritura a disco: un corte de luz no deja archivos a medias con el nombre final. Un archivo dañado o de 0 bytes se saltea sin trabar la copia; Cancelar responde aunque la tarjeta esté trabada; salir en medio de una copia pide confirmación y la corta de forma ordenada. |
+| **Borrar después de copiar** | Opcional: solo se borra lo ya copiado y verificado (mismo tamaño), con sus `.LRV`/`.THM`. |
 
-### Uso con HERO5
+### Respaldo a discos externos
 
-- **Por USB:** conecta la cámara encendida, aparece "HERO 5" y pulsas sincronizar. La HERO5 no informa la batería por USB; el espacio de la tarjeta sí se muestra.
-- **Con lector de tarjetas (recomendado para mucho volumen):** inserta la microSD y sincroniza igual. Es la forma más rápida y la que conserva todas las fechas originales.
+- **Respaldar a disco** (menú lateral): elegís la carpeta y el destino; el diálogo recuerda la última configuración.
+- Corre en segundo plano en **Actividad**, en paralelo con la sincronización, con progreso, Cancelar y cola.
+- Incremental: solo lo nuevo o cambiado. **En el respaldo nunca se borra nada**; los discos desconectados se saltean y se avisa.
+- **Verificar el contenido** (opcional): compara byte por byte lo ya respaldado y vuelve a copiar lo que se haya dañado en el disco.
+- Respaldo automático después de cada sincronización que copió algo (*Ajustes → Ubicación*).
+
+### Galería y herramientas de video
+
+| Función | Detalle |
+|---|---|
+| **Galería** | Fotos y videos por fecha, filtro por fecha, miniaturas en caché (miles de archivos en segundos), información del archivo (EXIF / MP4), borrar a la Papelera. |
+| **Unir videos partidos** | La GoPro corta las grabaciones largas en partes de ~4 GB (`GOPR1234`, `GP011234`…). *Videos → Unir videos partidos* las une **sin recomprimir** (misma calidad, conservando el GPS y la fecha). Opción de mandar las partes a la Papelera. |
+| **Recorrido GPS** | Clic derecho en un video → *Ver recorrido en el mapa*: el trayecto sobre OpenStreetMap con distancia, velocidad máxima y promedio, y altura (filtra la deriva del GPS mientras busca señal). |
+| **Versión liviana** | Clic derecho → *Crear versión liviana para compartir*: 720p H.264 lista para WhatsApp o mail, en `Videos\GoPro Sync`. |
+| **Reparar videos dañados** | Para videos sin índice (grabación cortada): clic derecho → *Intentar reparar*. Recupera la **imagen, sin sonido**, usando otro video sano de la misma cámara como referencia. El original no se toca. |
+
+Las herramientas corren en segundo plano en **Actividad**, con progreso y Cancelar. El video se procesa con ffmpeg, que viene incluido.
+
+### Interfaz
+
+- Español, inglés y alemán (se elige al primer inicio; *Ajustes → Sistema*).
+- Tema oscuro en toda la app, incluidas las barras de título; progreso de la copia en el ícono de la barra de tareas.
+- Con inicio automático, queda junto al reloj y abre al conectar la cámara.
+- Nítida en pantallas 4K / escaladas.
+
+## Requisitos
+
+- Windows 10 u 11 (64 bits). La conexión con la cámara usa APIs de Windows (MTP/WPD).
+- Para el mapa GPS y las actualizaciones hace falta conexión a internet.
 
 ## Desarrollo
 
 ```
 app/                 código de la app (main.py) y recursos (assets/)
 packaging/build.ps1  compila: PyInstaller + ZIP portable + instalador Inno Setup
-packaging/try.ps1    compila y abre la versión actual para probarla en tu PC
+packaging/try.ps1    abre la versión actual para probarla en tu PC
 packaging/GoProSync.iss  script del instalador
 release.ps1          publica una versión nueva
 .github/workflows/release.yml  build y Release automáticos en GitHub
@@ -54,20 +84,18 @@ release.ps1          publica una versión nueva
 ### Probar antes de publicar
 
 ```powershell
-.\packaging\try.ps1
+.\packaging\try.ps1 -FromSource
 ```
 
-Compila la versión actual del código y la abre en tu PC, sin publicar nada. Usa siempre tu configuración real: lo que cambies en la prueba queda guardado y lo ve también la app instalada. Mientras tanto cierra la GoPro Sync instalada. La primera vez crea el entorno `.venv` con las dependencias, lo que tarda unos minutos.
-
-- `.\packaging\try.ps1 -FromSource`: abre directo desde el código, sin compilar. Es lo más rápido para probar cambios.
+Abre la versión actual del código en tu PC, sin publicar nada. Usa siempre tu configuración real: lo que cambies en la prueba queda guardado y lo ve también la app instalada. Mientras tanto cierra la GoPro Sync instalada. La primera vez crea el entorno `.venv` con las dependencias. Sin `-FromSource` compila primero (más lento, pero prueba el ejecutable real).
 
 ### Publicar una versión
 
 ```powershell
-.\release.ps1 1.1.0
+.\release.ps1 1.4.0
 ```
 
-El script comprueba que estés en `main` sin cambios pendientes, cambia `APP_VERSION` en `app\main.py`, hace el commit y crea el tag `v1.1.0`, y lo sube a GitHub. GitHub Actions compila y publica el Release con el instalador y el ZIP (tarda unos 5-10 min). Las notas del Release se generan solas a partir de los commits.
+El script comprueba que estés en `main` sin cambios pendientes, cambia `APP_VERSION` en `app\main.py`, hace el commit, crea el tag `v1.4.0` y lo sube a GitHub. GitHub Actions compila y publica el Release con el instalador y el ZIP (unos 5-10 min); la app instalada lo ofrece sola como actualización. Las notas del Release se generan a partir de los commits.
 
 Para probar un build sin publicar nada: pestaña **Actions → Build y release → Run workflow**. Los archivos quedan como artefactos de esa ejecución.
 

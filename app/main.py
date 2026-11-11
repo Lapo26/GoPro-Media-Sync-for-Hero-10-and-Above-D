@@ -321,6 +321,12 @@ TRANSLATIONS = {
         "cam_preview_loading": "Vorschau wird von der Kamera geholt…",
         "cam_preview_failed": "Die Vorschau konnte nicht von der Kamera geholt werden.",
         "cam_view_btn": "Dateien der Kamera ansehen",
+        "ctx_repair": "Reparatur versuchen (stellt das Bild wieder her, ohne Ton)",
+        "repair_title": "{name} reparieren",
+        "repair_done": "Repariert: {name} ({dur}, ohne Ton).",
+        "repair_no_ref": "In diesem Ordner gibt es kein intaktes Video derselben Kamera als Referenz.",
+        "repair_failed": "Das Bild dieses Videos konnte nicht wiederhergestellt werden.",
+        "repair_empty": "Leere Datei: es gibt nichts wiederherzustellen.",
         "ctx_map": "Route auf der Karte anzeigen",
         "gps_title": "GPS-Route · {name}",
         "gps_reading": "GPS des Videos wird gelesen…",
@@ -669,6 +675,12 @@ TRANSLATIONS = {
         "cam_preview_loading": "Getting the preview from the camera…",
         "cam_preview_failed": "Could not get the preview from the camera.",
         "cam_view_btn": "View camera files",
+        "ctx_repair": "Try to repair (recovers the picture, no sound)",
+        "repair_title": "Repair {name}",
+        "repair_done": "Repaired: {name} ({dur}, no sound).",
+        "repair_no_ref": "There is no healthy video from the same camera in that folder to use as reference.",
+        "repair_failed": "The picture of this video could not be recovered.",
+        "repair_empty": "Empty file: there is nothing to recover.",
         "ctx_map": "Show route on the map",
         "gps_title": "GPS route · {name}",
         "gps_reading": "Reading the video's GPS…",
@@ -1017,6 +1029,12 @@ TRANSLATIONS = {
         "cam_preview_loading": "Trayendo la vista previa desde la cámara…",
         "cam_preview_failed": "No se pudo traer la vista previa de la cámara.",
         "cam_view_btn": "Ver archivos de la cámara",
+        "ctx_repair": "Intentar reparar (recupera la imagen, sin sonido)",
+        "repair_title": "Reparar {name}",
+        "repair_done": "Reparado: {name} ({dur}, sin sonido).",
+        "repair_no_ref": "No hay un video sano de la misma cámara en esa carpeta para usar de referencia.",
+        "repair_failed": "No se pudo recuperar la imagen de este video.",
+        "repair_empty": "Archivo vacío: no hay nada que recuperar.",
         "ctx_map": "Ver recorrido en el mapa",
         "gps_title": "Recorrido GPS · {name}",
         "gps_reading": "Leyendo el GPS del video…",
@@ -6811,6 +6829,8 @@ class GalleryBase(QWidget):
             menu.addAction(tr(self.lang, "ctx_light"), lambda: main.make_light_version(path))
             menu.addAction(tr(self.lang, "ctx_map"), lambda: GpsMapDialog(
                 self, self.lang, path, getattr(main, "get_current_theme_color", lambda: "#00f2fe")()).exec())
+            if os.path.getsize(path) > 0 and is_broken_mp4(path):
+                menu.addAction(tr(self.lang, "ctx_repair"), lambda: main.repair_video(path))
             group = chapter_group_of(path)
             if group and not group["done"] and not group["damaged"]:
                 menu.addAction(tr(self.lang, "ctx_join", n=len(group["parts"])), lambda: main.join_groups([group]))
@@ -12289,6 +12309,16 @@ class MainWindow(QWidget):
         self.sync_page.start_tool(tr(self.lang, "light_title", name=os.path.basename(path)),
                                   [light_version_job(path, self.lang)], done)
 
+    def repair_video(self, path):
+        def done(ok, stats):
+            outs = stats.get("outputs") or []
+            if ok and outs:
+                self.videos_page.refresh()
+                show_in_explorer(outs[0])
+        self.show_activity()
+        self.sync_page.start_tool(tr(self.lang, "repair_title", name=os.path.basename(path)),
+                                  [repair_job(path, self.lang)], done)
+
     def open_join_dialog(self):
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
@@ -12950,6 +12980,253 @@ def join_job(group, lang, recycle_parts, on_joined=None):
                 move_to_recycle_bin(x)
         return True, {"output": out, "note": tr(lang, "join_one_done", name=os.path.basename(out))}
     return {"name": group["name"], "size": group["size"], "run": run}
+
+
+# ---- reparar videos sin indice (grabacion cortada): rescate de la imagen
+def _avcc_params(path):
+    """SPS, PPS y fps (como fraccion para ffmpeg) de un video sano."""
+    moov = _read_moov(path)
+    if not moov:
+        return None
+    i = moov.find(b"avcC")
+    if i < 0:
+        return None
+    a = i + 4
+    p = a + 6
+    sps, pps = [], []
+    try:
+        for _ in range(moov[a + 5] & 0x1F):
+            ln = struct.unpack(">H", moov[p:p + 2])[0]
+            sps.append(bytes(moov[p + 2:p + 2 + ln]))
+            p += 2 + ln
+        n = moov[p]
+        p += 1
+        for _ in range(n):
+            ln = struct.unpack(">H", moov[p:p + 2])[0]
+            pps.append(bytes(moov[p + 2:p + 2 + ln]))
+            p += 2 + ln
+    except Exception:
+        return None
+    fps = None
+    try:
+        out = subprocess.run([ffmpeg_exe(), "-hide_banner", "-i", path], capture_output=True, text=True,
+                             encoding="utf-8", errors="replace", startupinfo=_hidden_startupinfo(), timeout=30).stderr
+        mm = re.search(r"([\d.]+) fps", out)
+        if mm:
+            val = float(mm.group(1))
+            known = {23.98: "24000/1001", 29.97: "30000/1001", 59.94: "60000/1001", 119.88: "120000/1001",
+                     47.95: "48000/1001", 239.76: "240000/1001"}
+            fps = next((v for k, v in known.items() if abs(k - val) < 0.02), f"{val:g}")
+    except Exception:
+        pass
+    return {"sps": sps, "pps": pps, "fps": fps}
+
+
+def _repair_references(src):
+    """Videos sanos de la misma carpeta, empezando por los de numeracion mas cercana."""
+    d = os.path.dirname(src)
+    digits = re.sub(r"\D", "", os.path.basename(src))[-4:]
+    try:
+        names = [n for n in os.listdir(d) if n.lower().endswith(".mp4") and os.path.join(d, n) != src
+                 and "_reparado" not in n.lower()]
+    except OSError:
+        return []
+    def dist(n):
+        dd = re.sub(r"\D", "", n)[-4:]
+        return abs(int(dd) - int(digits)) if dd and digits else 99999
+    out = []
+    for n in sorted(names, key=dist):
+        full = os.path.join(d, n)
+        if not is_broken_mp4(full):
+            out.append(full)
+        if len(out) >= 3:
+            break
+    return out
+
+
+_AUD = b"\x00\x00\x00\x02\x09"      # separador de cuadro (Access Unit Delimiter, 2 bytes)
+
+
+def _parse_frame(buf, i, end, known):
+    """Valida un cuadro que empieza en i (AUD + SEI/SPS/PPS + imagen) y
+    devuelve (fin, [NALs]) o None. La GoPro escribe cada cuadro asi y entre
+    cuadros mete audio/GPS: solo se acepta lo que encaja exacto."""
+    nals = [buf[i + 4:i + 6]]
+    j = i + 6
+    slices = 0
+    while j + 6 <= end:
+        ln = struct.unpack(">I", buf[j:j + 4])[0]
+        h = buf[j + 4]
+        t = h & 0x1F
+        if h & 0x80 or j + 4 + ln > end:
+            break
+        if t == 6 and 2 <= ln <= 1024 and not slices:
+            pass
+        elif t in (7, 8) and not slices:
+            if bytes(buf[j + 4:j + 4 + ln]) not in known:
+                return None                    # SPS/PPS que no es de esta camara: no es un cuadro
+        elif t in (1, 5) and 64 <= ln <= 12_000_000:
+            first_mb_zero = bool(buf[j + 5] & 0x80)
+            if (slices == 0) != first_mb_zero:  # el primer slice arranca en el macrobloque 0
+                break
+            if t == 5 and not (h & 0x60):
+                return None
+            slices += 1
+        else:
+            break
+        nals.append(buf[j + 4:j + 4 + ln])
+        j += 4 + ln
+    return (j, nals) if slices else None
+
+
+def _rescue_h264(src, params, sink, progress, cancel, max_bytes=None):
+    """Recorre el mdat del video roto y manda a 'sink' el H.264 (Annex B),
+    cuadro por cuadro."""
+    known = set(params["sps"]) | set(params["pps"])
+    start = b"\x00\x00\x00\x01"
+    sink(b"".join(start + x for x in params["sps"] + params["pps"]))
+    size = os.path.getsize(src)
+    frames = 0
+    with open(src, "rb") as f:
+        pos = 0
+        while True:                                  # saltar las cajas hasta mdat
+            f.seek(pos)
+            h = f.read(16)
+            if len(h) < 8:
+                return 0
+            bs = struct.unpack(">I", h[:4])[0]
+            if h[4:8] == b"mdat":
+                pos += 16 if bs == 1 else 8
+                break
+            if bs < 8:
+                return 0
+            pos += bs
+        f.seek(pos)
+        carry = b""
+        done = pos
+        out = bytearray()
+        while True:
+            if cancel():
+                raise _CopyCancelled()
+            want = 64 * 1024 * 1024
+            if max_bytes is not None:
+                want = max(0, min(want, max_bytes - (done - pos)))
+            chunk = f.read(want) if want else b""
+            buf = carry + chunk
+            end = len(buf)
+            final = not chunk
+            limit = end if final else max(0, end - 13_000_000)   # un cuadro entero tiene que entrar
+            consumed = 0
+            i = buf.find(_AUD, 0)
+            while 0 <= i < limit:
+                fr = _parse_frame(buf, i, end, known)
+                if fr is None:
+                    i = buf.find(_AUD, i + 1)
+                    continue
+                j, nals = fr
+                consumed = j
+                for nal in nals:
+                    out += start + nal
+                frames += 1
+                if len(out) > 8 * 1024 * 1024:
+                    sink(bytes(out))
+                    out = bytearray()
+                i = buf.find(_AUD, j)
+            if out:
+                sink(bytes(out))
+                out = bytearray()
+            done += len(chunk)
+            if progress:
+                progress(min(99.0, (done - pos) * 100.0 / max(1, size - pos)))
+            if final:
+                break
+            k = i if 0 <= i < end else limit
+            carry = buf[max(min(k, limit), consumed):]     # sin repetir el final del ultimo cuadro
+    return frames
+
+
+def repair_job(src, lang, out_dir=None):
+    """Recupera la imagen de un video al que le falta el indice (moov)."""
+    def run(progress, cancel):
+        if os.path.getsize(src) == 0:
+            return False, tr(lang, "repair_empty")
+        refs = _repair_references(src)
+        if not refs:
+            return False, tr(lang, "repair_no_ref")
+        base = os.path.splitext(os.path.basename(src))[0]
+        out = os.path.join(out_dir or os.path.dirname(src), f"{base}_reparado.MP4")
+        part = out + ".part.mp4"
+        def mux(params, part, max_bytes, prog):
+            args = [ffmpeg_exe(), "-hide_banner", "-nostdin", "-y", "-loglevel", "error", "-f", "h264"]
+            if params["fps"]:
+                args += ["-r", params["fps"]]
+            args += ["-i", "pipe:0", "-c", "copy", part]
+            proc = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+                                    stderr=subprocess.DEVNULL, startupinfo=_hidden_startupinfo())
+            try:
+                _rescue_h264(src, params, proc.stdin.write, prog, cancel, max_bytes)
+                proc.stdin.close()
+                proc.wait()
+            except BaseException:
+                proc.kill()
+                proc.wait()
+                raise
+            return proc.returncode == 0
+
+        def decodes(path):
+            chk = subprocess.run([ffmpeg_exe(), "-hide_banner", "-v", "error", "-t", "3", "-i", path, "-f", "null", "-"],
+                                 capture_output=True, text=True, encoding="utf-8", errors="replace",
+                                 startupinfo=_hidden_startupinfo(), timeout=120)
+            return chk.stderr.count("\n") < 30
+
+        def drop(path):
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+
+        # 1) elegir la referencia probando solo el comienzo del video (rapido)
+        chosen = None
+        for ref in refs:
+            params = _avcc_params(ref)
+            if not params or not params["sps"]:
+                continue
+            try:
+                ok = mux(params, part, 200 * 1024 * 1024, None)
+            except _CopyCancelled:
+                drop(part)
+                return False, "cancelled"
+            except Exception:
+                ok = False
+            good = ok and (read_mp4_info(part).get("duration") or 0) > 1 and decodes(part)
+            drop(part)
+            if good:
+                chosen = params
+                break
+        if chosen is None:
+            return False, tr(lang, "repair_failed")
+        # 2) el archivo completo, una sola vez
+        try:
+            ok = mux(chosen, part, None, progress)
+        except _CopyCancelled:
+            drop(part)
+            return False, "cancelled"
+        except Exception:
+            ok = False
+        dur = read_mp4_info(part).get("duration") if ok and os.path.exists(part) else 0
+        if ok and dur and dur > 1 and decodes(part):
+            os.replace(part, out)
+            try:
+                shutil.copystat(src, out)
+                _copy_creation_time(src, out)
+            except Exception:
+                pass
+            mins, secs = int(dur // 60), int(dur % 60)
+            return True, {"output": out, "note": tr(lang, "repair_done", name=os.path.basename(out),
+                                                   dur=f"{mins}:{secs:02d}")}
+        drop(part)
+        return False, tr(lang, "repair_failed")
+    return {"name": os.path.basename(src), "size": os.path.getsize(src) or 1, "run": run}
 
 
 class JoinDialog(QDialog):
