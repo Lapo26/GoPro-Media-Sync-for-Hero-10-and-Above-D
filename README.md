@@ -1,6 +1,6 @@
 # GoPro Sync: HERO5, tarjeta SD y respaldos
 
-Reemplazo de **GoPro Quik for desktop** para Windows. Conectás la cámara o la
+Reemplazo de **GoPro Quik for desktop** para Windows, macOS y Linux. Conectás la cámara o la
 tarjeta y la app copia fotos y videos a tu PC, ordenados en carpetas
 `AAAA-MM-DD` según la fecha de grabación, sin duplicar lo que ya tenías.
 Después los podés respaldar en uno o varios discos externos, ver en una
@@ -14,11 +14,13 @@ Fork de [JelloC19/GoPro-Media-Sync-for-Hero-10-and-Above-D](https://github.com/J
 En **[Releases](https://github.com/Lapo26/GoPro-Sync/releases/latest)**:
 
 - `GoProSync-Setup-X.Y.Z.exe`: el **instalador**. No pide permisos de administrador, agrega GoPro Sync al menú Inicio, ofrece crear el acceso directo en el escritorio y queda en *Aplicaciones* de Windows con su desinstalador.
-- `GoProSync-X.Y.Z-portable.zip`: la versión **portable**. Se descomprime y se ejecuta `GoProSync.exe`.
+- `GoProSync-X.Y.Z-portable.zip`: la versión **portable** para Windows. Se descomprime y se ejecuta `GoProSync.exe`.
+- `GoProSync-X.Y.Z-macOS-arm64.dmg`: **macOS** (Apple Silicon, M1 o posterior). Abrís el .dmg y arrastrás GoPro Sync a *Aplicaciones*. La app no está firmada por Apple: la primera vez, clic derecho sobre la app → **Abrir** → **Abrir**.
+- `GoProSync-X.Y.Z-Linux-x86_64.AppImage`: **Linux** (Ubuntu 22.04+, Fedora 36+, Debian 12+ y similares). Le das permiso de ejecución (`chmod +x GoProSync-*.AppImage`) y la abrís.
 
 **Actualizaciones:** la app busca versiones nuevas al iniciar. Si hay una, aparece **Actualizar a X.Y.Z** en el menú lateral y se instala con un clic. Se puede desactivar en *Ajustes*.
 
-La configuración y la caché de miniaturas se guardan en `%APPDATA%\GoProSyncPro` y se conservan entre versiones.
+La configuración y la caché de miniaturas se conservan entre versiones. Se guardan en `%APPDATA%\GoProSyncPro` (Windows), `~/Library/Application Support/GoProSyncPro` (macOS) o `~/.config/GoProSyncPro` (Linux).
 
 ## Funciones
 
@@ -63,14 +65,18 @@ Las herramientas corren en segundo plano en **Actividad**, con progreso y Cancel
 
 ## Requisitos
 
-- Windows 10 u 11 (64 bits). La conexión con la cámara usa APIs de Windows (MTP/WPD).
-- Para el mapa GPS y las actualizaciones hace falta conexión a internet.
+- **Windows 10 u 11** (64 bits): la cámara por USB usa MTP/WPD de Windows.
+- **macOS 12 o posterior** (Apple Silicon) y **Linux** x86_64: la cámara por USB usa [libgphoto2](http://gphoto.org/), que viene incluida.
+  - En **Mac**, si Fotos o Captura de Imagen se abren al conectar la cámara, cerralos: mientras la usan, GoPro Sync no puede leerla (la app intenta liberarla sola).
+  - En **Linux**, si el explorador de archivos montó la cámara, desmontala. Si no aparece, puede faltar permiso sobre el USB: instalá el paquete `libgphoto2` de tu distribución (trae las reglas udev) y volvé a conectarla.
+- Para el mapa GPS y las actualizaciones hace falta conexión a internet. En macOS y Linux la app avisa de las versiones nuevas y abre la descarga; en Windows se instalan solas.
 
 ## Desarrollo
 
 ```
 app/                 código de la app (main.py) y recursos (assets/)
-packaging/build.ps1  compila: PyInstaller + ZIP portable + instalador Inno Setup
+packaging/build.ps1  compila en Windows: PyInstaller + ZIP portable + instalador Inno Setup
+packaging/build_unix.sh  compila en macOS (.dmg) o Linux (.AppImage)
 packaging/try.ps1    abre la versión actual para probarla en tu PC
 packaging/GoProSync.iss  script del instalador
 release.ps1          publica una versión nueva
@@ -95,7 +101,7 @@ Abre la versión actual del código en tu PC, sin publicar nada. Usa siempre tu 
 .\release.ps1 1.4.0
 ```
 
-El script comprueba que estés en `main` sin cambios pendientes, cambia `APP_VERSION` en `app\main.py`, hace el commit, crea el tag `v1.4.0` y lo sube a GitHub. GitHub Actions compila y publica el Release con el instalador y el ZIP (unos 5-10 min); la app instalada lo ofrece sola como actualización. Las notas del Release se generan a partir de los commits.
+El script comprueba que estés en `main` sin cambios pendientes, cambia `APP_VERSION` en `app\main.py`, hace el commit, crea el tag `v1.4.0` y lo sube a GitHub. GitHub Actions compila en paralelo para Windows, macOS y Linux, corre una autoprueba de cada ejecutable (`--selftest`) y publica el Release con los instaladores (unos 10 min); la app instalada lo ofrece sola como actualización. Las notas del Release se generan a partir de los commits.
 
 Para probar un build sin publicar nada: pestaña **Actions → Build y release → Run workflow**. Los archivos quedan como artefactos de esa ejecución.
 
