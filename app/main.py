@@ -12742,6 +12742,12 @@ def ffmpeg_exe():
         except Exception as e:
             print("[ffmpeg]", e)
             _FFMPEG["exe"] = ""
+        if not _FFMPEG["exe"] or not os.path.exists(_FFMPEG["exe"]):
+            # app compilada: buscarlo junto al programa
+            import glob
+            base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+            found = glob.glob(os.path.join(base, "imageio_ffmpeg", "binaries", "ffmpeg*.exe"))
+            _FFMPEG["exe"] = found[0] if found else ""
     return _FFMPEG["exe"] or None
 
 
