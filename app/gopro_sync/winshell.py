@@ -239,6 +239,26 @@ def _set_autostart_posix(enabled):
         print("[Inicio automatico]", e)
 
 
+def autostart_registered():
+    """Si "Iniciar con Windows" esta activo de verdad (lo puede activar el
+    instalador o quitarlo el usuario desde Windows). None si no se puede saber."""
+    if IS_WINDOWS:
+        if winreg is None:
+            return None
+        try:
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\Windows\CurrentVersion\Run") as key:
+                winreg.QueryValueEx(key, "GoProSyncPro")
+            return True
+        except FileNotFoundError:
+            return False
+        except OSError:
+            return None
+    if IS_MAC:
+        return os.path.exists(os.path.expanduser("~/Library/LaunchAgents/com.gopro-sync.app.plist"))
+    return os.path.exists(os.path.join(os.getenv("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"),
+                                       "autostart", "gopro-sync.desktop"))
+
+
 def set_autostart(enabled):
     """Traegt GoPro Sync Pro in den Windows-Autostart ein bzw. entfernt den
     Eintrag wieder (HKEY_CURRENT_USER, kein Adminrecht noetig). Der Eintrag

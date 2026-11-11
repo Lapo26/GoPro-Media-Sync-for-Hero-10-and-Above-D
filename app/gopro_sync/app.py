@@ -7,9 +7,9 @@ import time
 import traceback
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication
-from .env import CONFIG_DIR, CONFIG_FILE, IS_WINDOWS, asset_path, load_config, minimize_own_console
+from .env import CONFIG_DIR, CONFIG_FILE, IS_WINDOWS, asset_path, load_config, minimize_own_console, save_config
 from .i18n import tr
-from .winshell import bring_to_front, install_dark_titlebars
+from .winshell import autostart_registered, bring_to_front, install_dark_titlebars
 from .sound import ClickSoundFilter, SoundManager
 from .camera import GPHOTO
 from .videotools import ffmpeg_exe
@@ -23,6 +23,12 @@ def main():
     install_dark_titlebars(app)       # respaldo: otras ventanas, al recibir el foco
 
     config = load_config()
+    # "Iniciar con Windows" puede haberlo activado el instalador (o quitado el
+    # usuario desde Windows): Ajustes muestra el estado real.
+    real = autostart_registered()
+    if real is not None and real != bool(config.get("autostart_enabled", False)):
+        config["autostart_enabled"] = real
+        save_config(config)
     def get_glow_color():
         return config.get("accent_color", "#00f2fe")
 
