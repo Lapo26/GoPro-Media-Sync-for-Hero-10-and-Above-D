@@ -1,5 +1,6 @@
 PySide6
 opencv-python
 bleak
-comtypes
+comtypes; sys_platform == "win32"
+gphoto2; sys_platform != "win32"
 imageio-ffmpeg

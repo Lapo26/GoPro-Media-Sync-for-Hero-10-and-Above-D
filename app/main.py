@@ -117,7 +117,20 @@ APP_VERSION = "1.3.2"
 # redirige la API, pero conviene mantener esto al dia).
 GITHUB_REPO = "Lapo26/GoPro-Sync"
 
-CONFIG_DIR = os.path.join(os.getenv("APPDATA") or os.path.expanduser("~"), "GoProSyncPro")
+IS_WINDOWS = os.name == "nt"
+IS_MAC = sys.platform == "darwin"
+
+
+def _config_base():
+    # Windows: igual que siempre (%APPDATA%), para no perder la configuracion existente.
+    if IS_WINDOWS:
+        return os.getenv("APPDATA") or os.path.expanduser("~")
+    if IS_MAC:
+        return os.path.expanduser("~/Library/Application Support")
+    return os.getenv("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
+
+
+CONFIG_DIR = os.path.join(_config_base(), "GoProSyncPro")
 CONFIG_FILE = os.path.join(CONFIG_DIR, "sync_config.json")
 # UNA sola familia: con varias (o con emojis en los textos) Qt revisa las ~500
 # familias de Windows buscando reemplazos y el arranque tardaba 1,5-1,9 s mas.
@@ -242,8 +255,12 @@ def _system_language():
     """Idioma inicial segun el idioma de Windows: espanol, aleman o, para
     cualquier otro, ingles."""
     try:
-        primary = ctypes.windll.kernel32.GetUserDefaultUILanguage() & 0x3FF
-        return {0x0A: "es", 0x07: "de"}.get(primary, "en")
+        if IS_WINDOWS:
+            primary = ctypes.windll.kernel32.GetUserDefaultUILanguage() & 0x3FF
+            return {0x0A: "es", 0x07: "de"}.get(primary, "en")
+        from PySide6.QtCore import QLocale
+        code = QLocale.system().name()[:2].lower()
+        return code if code in ("es", "de") else "en"
     except Exception:
         return "en"
 
@@ -321,6 +338,9 @@ TRANSLATIONS = {
         "cam_preview_loading": "Vorschau wird von der Kamera geholt…",
         "cam_preview_failed": "Die Vorschau konnte nicht von der Kamera geholt werden.",
         "cam_view_btn": "Dateien der Kamera ansehen",
+        "gphoto_missing": "Die Komponente für die USB-Kamera (gphoto2) fehlt.",
+        "gphoto_busy": "Ein anderes Programm verwendet die Kamera. Bitte schließen (Mac: Fotos oder Digitale Bilder; Linux: Kamera im Dateimanager aushängen) und erneut versuchen.",
+        "update_open_page": "Download öffnen",
         "ctx_repair": "Reparatur versuchen (stellt das Bild wieder her, ohne Ton)",
         "repair_title": "{name} reparieren",
         "repair_done": "Repariert: {name} ({dur}, ohne Ton).",
@@ -675,6 +695,9 @@ TRANSLATIONS = {
         "cam_preview_loading": "Getting the preview from the camera…",
         "cam_preview_failed": "Could not get the preview from the camera.",
         "cam_view_btn": "View camera files",
+        "gphoto_missing": "The USB camera component (gphoto2) is missing.",
+        "gphoto_busy": "Another program is using the camera. Close it (on Mac: Photos or Image Capture; on Linux: unmount the camera in the file manager) and try again.",
+        "update_open_page": "Open download",
         "ctx_repair": "Try to repair (recovers the picture, no sound)",
         "repair_title": "Repair {name}",
         "repair_done": "Repaired: {name} ({dur}, no sound).",
@@ -1029,6 +1052,9 @@ TRANSLATIONS = {
         "cam_preview_loading": "Trayendo la vista previa desde la cámara…",
         "cam_preview_failed": "No se pudo traer la vista previa de la cámara.",
         "cam_view_btn": "Ver archivos de la cámara",
+        "gphoto_missing": "Falta el componente para la cámara por USB (gphoto2).",
+        "gphoto_busy": "Otro programa está usando la cámara. Cerralo (en Mac: Fotos o Captura de Imagen; en Linux: desmontá la cámara del explorador de archivos) y volvé a intentar.",
+        "update_open_page": "Abrir la descarga",
         "ctx_repair": "Intentar reparar (recupera la imagen, sin sonido)",
         "repair_title": "Reparar {name}",
         "repair_done": "Reparado: {name} ({dur}, sin sonido).",
@@ -2060,6 +2086,8 @@ class GlowHoverAnimator(QObject):
 # --- [ GOPRO STATUS & API SWITCH ] ---
 
 def _hidden_startupinfo():
+    if not IS_WINDOWS:
+        return None                      # STARTUPINFO solo existe en Windows
     si = subprocess.STARTUPINFO()
     si.dwFlags |= subprocess.STARTF_USESHOWWINDOW
     si.wShowWindow = subprocess.SW_HIDE
@@ -2347,10 +2375,233 @@ import atexit
 atexit.register(_DEVICE_PROBE.close)
 
 
+class GPhotoBackend:
+    """Camara por USB en macOS y Linux via libgphoto2 (el paquete de Python
+    'gphoto2' ya trae la biblioteca). Una sola conexion compartida y
+    protegida con un lock: libgphoto2 no admite dos usos a la vez."""
+
+    def __init__(self):
+        self.lock = threading.RLock()
+        self.cam = None
+        self.name = None
+        self._gp = None
+        self._last = (0.0, None)
+
+    def gp(self):
+        if self._gp is None:
+            try:
+                import gphoto2 as gp
+                self._gp = gp
+            except Exception as e:
+                print("[gphoto2] no disponible:", e)
+                self._gp = False
+        return self._gp or None
+
+    def autodetect(self):
+        gp = self.gp()
+        if not gp:
+            return None
+        now = time.monotonic()
+        if now - self._last[0] < 2.0:
+            return self._last[1]
+        name = None
+        try:
+            for nm, _addr in gp.Camera.autodetect():
+                if "gopro" in nm.lower() or "hero" in nm.lower():
+                    name = nm
+                    break
+        except Exception as e:
+            print("[gphoto2] autodetect:", e)
+        if name is None and self.cam is not None:
+            self.close()                         # se desconecto
+        self._last = (now, name)
+        self.name = name
+        return name
+
+    def open(self):
+        gp = self.gp()
+        if not gp:
+            raise RuntimeError("gphoto2")
+        with self.lock:
+            if self.cam is None:
+                if IS_MAC:
+                    # macOS toma la camara con PTPCamera (Fotos / Captura de Imagen) y no la suelta
+                    subprocess.run(["killall", "PTPCamera"], capture_output=True)
+                cam = gp.Camera()
+                cam.init()
+                self.cam = cam
+            return self.cam
+
+    def close(self):
+        with self.lock:
+            if self.cam is not None:
+                try:
+                    self.cam.exit()
+                except Exception:
+                    pass
+                self.cam = None
+
+    def _walk(self, cam, folder):
+        out = [(folder, n) for n, _v in cam.folder_list_files(folder)]
+        for sub, _v in cam.folder_list_folders(folder):
+            out.extend(self._walk(cam, folder.rstrip("/") + "/" + sub))
+        return out
+
+    def list_files(self, exts=None):
+        """Mismo formato que el listado por MTP de Windows: name, size, path, dt."""
+        with self.lock:
+            try:
+                cam = self.open()
+                items = []
+                for folder, name in self._walk(cam, "/"):
+                    if exts and not name.lower().endswith(exts):
+                        continue
+                    try:
+                        info = cam.file_get_info(folder, name)
+                        size, mt = int(info.file.size), int(info.file.mtime)
+                    except Exception:
+                        size, mt = 0, 0
+                    dt = datetime.fromtimestamp(mt).strftime("%Y-%m-%dT%H:%M:%S") if mt else ""
+                    items.append({"name": name, "size": size, "path": folder, "dt": dt})
+                return items
+            except Exception:
+                self.close()
+                raise
+
+    def read_file(self, folder, name, dest, size=0, progress=None, cancel=lambda: False, chunk=1024 * 1024):
+        """Copia por partes (sin cargar el video entero en memoria)."""
+        gp = self.gp()
+        part = dest + ".part"
+        with self.lock:
+            cam = self.open()
+            try:
+                with open(part, "wb") as f:
+                    try:
+                        off = 0
+                        buf = bytearray(chunk)
+                        while True:
+                            if cancel():
+                                return False
+                            n = cam.file_read(folder, name, gp.GP_FILE_TYPE_NORMAL, off, buf)
+                            if not n:
+                                break
+                            f.write(memoryview(buf)[:n])
+                            off += n
+                            if progress and size:
+                                progress(min(100.0, off * 100.0 / size))
+                            if size and off >= size:
+                                break
+                    except gp.GPhoto2Error:
+                        # camara sin lectura parcial: el archivo entero de una vez
+                        f.seek(0)
+                        f.truncate()
+                        data = cam.file_get(folder, name, gp.GP_FILE_TYPE_NORMAL).get_data_and_size()
+                        f.write(memoryview(data))
+                    f.flush()
+                    os.fsync(f.fileno())
+                if size and os.path.getsize(part) != size:
+                    raise IOError("size_mismatch")
+                os.replace(part, dest)
+                return True
+            finally:
+                if os.path.exists(part):
+                    try:
+                        os.remove(part)
+                    except OSError:
+                        pass
+
+    def thumbnail(self, folder, name):
+        gp = self.gp()
+        with self.lock:
+            cam = self.open()
+            return bytes(cam.file_get(folder, name, gp.GP_FILE_TYPE_PREVIEW).get_data_and_size())
+
+    def delete(self, folder, name):
+        with self.lock:
+            self.open().file_delete(folder, name)
+
+    def status(self):
+        out = {"battery": None, "storage_pct": None, "capacity_str": None, "free_str": None}
+        with self.lock:
+            try:
+                cam = self.open()
+                for st in cam.get_storageinfo():
+                    total = st.capacitykbytes * 1024
+                    free = st.freekbytes * 1024
+                    if total:
+                        out.update(storage_pct=int(round((total - free) * 100 / total)),
+                                   capacity_str=_fmt_gb(total), free_str=_fmt_gb(free))
+                        break
+                try:
+                    out["battery"] = parse_battery_percent(cam.get_single_config("batterylevel").get_value())
+                except Exception:
+                    pass
+            except Exception as e:
+                print("[gphoto2] estado:", e)
+        return out
+
+
+GPHOTO = GPhotoBackend()
+
+
+class GPhotoSession:
+    """Misma interfaz que WpdCameraSession, para la galeria de la camara en macOS/Linux."""
+
+    def __init__(self, name_match="HERO"):
+        self.objects = {}
+
+    def open(self, stop=lambda: False, **_k):
+        try:
+            items = GPHOTO.list_files()
+        except Exception as e:
+            print("[gphoto2]", e)
+            return False
+        self.objects = {e["name"].upper(): (e["path"], e["name"], e["size"]) for e in items}
+        return True
+
+    def thumbnail(self, name):
+        folder, nm, _sz = self.objects[name.upper()]
+        return GPHOTO.thumbnail(folder, nm)
+
+    def copy_to(self, name, dest, folder=None, progress=None, cancel=lambda: False, chunk=1024 * 1024):
+        f, nm, size = self.objects[name.upper()]
+        cb = (lambda pct: progress(int(pct * size / 100))) if progress else None
+        return GPHOTO.read_file(f, nm, dest, size, cb, cancel, chunk)
+
+    def close(self):
+        pass                     # la conexion es compartida (GPHOTO)
+
+
+def _posix_mount_roots():
+    """Unidades montadas (tarjetas, discos) en macOS / Linux."""
+    if IS_MAC:
+        bases = ["/Volumes"]
+    else:
+        user = os.environ.get("USER") or ""
+        bases = [f"/media/{user}", f"/run/media/{user}", "/media", "/mnt"]
+    roots = []
+    for b in bases:
+        try:
+            for n in os.listdir(b):
+                full = os.path.join(b, n)
+                if os.path.isdir(full) and full not in roots:
+                    roots.append(full)
+        except OSError:
+            pass
+    return roots
+
+
 def detect_connected_gopro_model():
     """Prueft, welche der unterstuetzten GoPro-Modelle (siehe GOPRO_MODELS)
     gerade per MTP am PC haengt. Gibt den Modell-Key (z.B. "HERO11") zurueck
     oder None, falls keine unterstuetzte GoPro gefunden wurde."""
+    if not IS_WINDOWS:
+        name = GPHOTO.autodetect()
+        if not name:
+            return None
+        LAST_DEVICE_NAME["name"] = name
+        up = name.upper()
+        return next((m for m in GOPRO_MODEL_ORDER if m in up), "HERO5")
     try:
         names = _DEVICE_PROBE.names()
         for line in names.splitlines():
@@ -2407,7 +2658,14 @@ def find_gopro_sd_card():
 
     Solo mira unidades extraibles/fijas que NO sean la del sistema, y
     suprime el dialogo "No hay disco en la unidad" de los lectores vacios."""
-    if os.name != "nt":
+    if not IS_WINDOWS:
+        for root in _posix_mount_roots():
+            dcim = os.path.join(root, "DCIM")
+            try:
+                if any(_GOPRO_DCIM_SUBDIR_RE.match(e) for e in os.listdir(dcim)):
+                    return root, _model_from_version_txt(root)
+            except OSError:
+                continue
         return None, None
     try:
         kernel32 = ctypes.windll.kernel32
@@ -2690,6 +2948,8 @@ def read_gopro_status(write_diag=True, model=None, sd_root=None):
                     "capacity_str": _fmt_gb(usage.total), "free_str": _fmt_gb(usage.free)}
         except Exception:
             return {"battery": None, "storage_pct": None, "capacity_str": None, "free_str": None}
+    if not IS_WINDOWS:
+        return GPHOTO.status()
     return _read_gopro_status_mtp(write_diag=write_diag, model=model)
 
 
@@ -4075,6 +4335,110 @@ class SyncWorkerThread(QThread):
             msg += tr(self.lang, "sync_errors_suffix", errors=errors)
         return msg
 
+    def _run_gphoto(self):
+        """Camara por USB en macOS/Linux (libgphoto2): mismo criterio que en
+        Windows (nombre + tamano, carpetas por fecha, solo lo nuevo)."""
+        if not GPHOTO.gp():
+            self.finished_sync.emit(False, tr(self.lang, "gphoto_missing"), {})
+            return
+        exts = tuple(e.lower() for e in MEDIA_EXTENSIONS_BY_MODE[self.sync_mode])
+        try:
+            items = GPHOTO.list_files(exts)
+        except Exception as e:
+            print("[gphoto2] listar:", e)
+            busy = "busy" in str(e).lower() or "claim" in str(e).lower()
+            self.finished_sync.emit(False, tr(self.lang, "gphoto_busy" if busy else "gopro_not_found"), {})
+            return
+        if self.only_keys is not None:
+            items = [e for e in items if camera_item_key(e) in self.only_keys]
+        if not items:
+            self.finished_sync.emit(True, tr(self.lang, "no_new_media"), {"total": 0, "copied": 0, "deleted": 0, "errors": 0})
+            return
+        os.makedirs(self.target_dir, exist_ok=True)
+        existing_index = {}
+        for root, _dirs, files in os.walk(self.target_dir):
+            for f in files:
+                if f.endswith(".part"):
+                    _remove_stale_part(os.path.join(root, f))
+                    continue
+                index_existing(existing_index, f, os.path.join(root, f))
+        cam_folder = quik_camera_folder(self.target_dir, self.device_name,
+                                        [p for paths in existing_index.values() for p in paths])
+        already, pending, to_delete = 0, [], []
+        for e in items:
+            if e["size"] and self._already_there(existing_index, e["name"], e["size"]):
+                already += 1
+                if self.delete_after:
+                    to_delete.append((e["path"], e["name"]))
+            else:
+                pending.append(e)
+        total = len(pending)
+        self.plan.emit([e["size"] for e in pending])
+        copied = errors = deleted = stalls = 0
+        for idx, e in enumerate(pending, start=1):
+            if self._cancel:
+                break
+            name, size, folder = e["name"], e["size"], e["path"]
+            self.progress.emit(idx, total, name, 0.0)
+            if size == 0:
+                errors += 1
+                self._err(name, tr(self.lang, "err_empty_file"))
+                continue
+            dt = _parse_camera_dt(e.get("dt")) or datetime.now()
+            dest_dir = self.target_dir
+            if self.sort_into_date_folders:
+                dest_dir = os.path.join(self.target_dir, dt.strftime("%Y-%m-%d"))
+                if cam_folder:
+                    dest_dir = os.path.join(dest_dir, cam_folder)
+            os.makedirs(dest_dir, exist_ok=True)
+            dest = os.path.join(dest_dir, name)
+            if os.path.exists(dest) and not replaceable_broken_copy(dest, size):
+                base, ext = os.path.splitext(name)
+                counter = 1
+                while os.path.exists(dest):
+                    dest = os.path.join(dest_dir, f"{base}_{counter}{ext}")
+                    counter += 1
+            try:
+                ok = GPHOTO.read_file(folder, name, dest, size,
+                                      lambda pct, i=idx, n=name: self.progress.emit(i, total, n, pct),
+                                      lambda: self._cancel)
+                stalls = 0
+            except Exception as ex:
+                ok = False
+                errors += 1
+                stalls += 1
+                self._err(name, self._reason_from_exception(ex))
+                GPHOTO.close()
+                if stalls >= 3:
+                    self.finished_sync.emit(False, tr(self.lang, "gopro_not_found"),
+                                            {"total": total, "copied": copied, "deleted": 0, "errors": errors,
+                                             "error_list": list(self.error_list)})
+                    return
+                continue
+            if self._cancel:
+                break
+            if ok:
+                set_file_times(dest, dt)
+                index_existing(existing_index, os.path.basename(dest), dest)
+                copied += 1
+                self.progress.emit(idx, total, name, 100.0)
+                if self.delete_after:
+                    to_delete.append((folder, name))
+        if self._cancel:
+            self._cancelled_result(copied, total)
+            return
+        if self.delete_after and to_delete:
+            self.progress.emit(total, total, "__CLEANUP__" + tr(self.lang, "cleaning_up"), 100.0)
+            for folder, name in to_delete:
+                try:
+                    GPHOTO.delete(folder, name)
+                    deleted += 1
+                except Exception as ex:
+                    print("[gphoto2] borrar:", name, ex)
+        result = {"total": total, "copied": copied, "deleted": deleted, "errors": errors,
+                  "already": already, "error_list": list(self.error_list)}
+        self.finished_sync.emit(errors == 0, self._result_message(copied, total, already, deleted, errors), result)
+
     def _import_one(self, src, name, size, idx, total, existing_index, cam_folder):
         """Importa un archivo. Devuelve "ok", "already", "empty", "error" o "cancel"."""
         for existing_path in existing_candidates(existing_index, name):
@@ -4484,6 +4848,13 @@ class SyncWorkerThread(QThread):
         if self.sd_root:
             try:
                 self._run_from_sd(self.sd_root)
+            except Exception as e:
+                traceback.print_exc()
+                self.finished_sync.emit(False, tr(self.lang, "sync_failed_detail", detail=str(e)[:300]), {})
+            return
+        if not IS_WINDOWS:
+            try:
+                self._run_gphoto()
             except Exception as e:
                 traceback.print_exc()
                 self.finished_sync.emit(False, tr(self.lang, "sync_failed_detail", detail=str(e)[:300]), {})
@@ -8350,11 +8721,52 @@ class AvatarPreview(QWidget):
         painter.drawEllipse(1, 1, r - 2, r - 2)
 
 
+def _app_command():
+    if getattr(sys, "frozen", False):
+        if IS_MAC and ".app/Contents/MacOS/" in sys.executable:
+            return ["open", "-a", sys.executable.split(".app/")[0] + ".app", "--args", "--silent"]
+        return [os.environ.get("APPIMAGE") or sys.executable, "--silent"]
+    return [sys.executable, os.path.abspath(__file__), "--silent"]
+
+
+def _set_autostart_posix(enabled):
+    try:
+        if IS_MAC:
+            path = os.path.expanduser("~/Library/LaunchAgents/com.gopro-sync.app.plist")
+            if enabled:
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                args = "".join(f"<string>{a}</string>" for a in _app_command())
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write('<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" '
+                            '"http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><dict>'
+                            '<key>Label</key><string>com.gopro-sync.app</string>'
+                            f'<key>ProgramArguments</key><array>{args}</array>'
+                            '<key>RunAtLoad</key><true/></dict></plist>\n')
+            elif os.path.exists(path):
+                os.remove(path)
+        else:
+            path = os.path.join(os.getenv("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"),
+                                "autostart", "gopro-sync.desktop")
+            if enabled:
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                cmd = " ".join(f'"{a}"' for a in _app_command())
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write(f"[Desktop Entry]\nType=Application\nName=GoPro Sync\nExec={cmd}\n"
+                            "X-GNOME-Autostart-enabled=true\n")
+            elif os.path.exists(path):
+                os.remove(path)
+    except Exception as e:
+        print("[Inicio automatico]", e)
+
+
 def set_autostart(enabled):
     """Traegt GoPro Sync Pro in den Windows-Autostart ein bzw. entfernt den
     Eintrag wieder (HKEY_CURRENT_USER, kein Adminrecht noetig). Der Eintrag
     startet die App mit "--silent", damit sie beim Windows-Login nicht
     sofort ein Fenster aufreisst (siehe main() / open_on_gopro_connect)."""
+    if not IS_WINDOWS:
+        _set_autostart_posix(enabled)
+        return
     if winreg is None:
         return
     try:
@@ -9873,8 +10285,12 @@ def describe_media(path, lang):
 def move_to_recycle_bin(path):
     """Mueve un archivo a la Papelera de reciclaje (no lo borra para siempre).
     Devuelve True si el archivo ya no esta en su lugar."""
-    if os.name != "nt":
-        return False
+    if not IS_WINDOWS:
+        try:
+            from PySide6.QtCore import QFile
+            return bool(QFile.moveToTrash(path)) or not os.path.exists(path)
+        except Exception:
+            return False
     try:
         from ctypes import wintypes
 
@@ -9982,7 +10398,12 @@ class ConfirmQuitDialog(QDialog):
 
 def show_in_explorer(path):
     try:
-        subprocess.Popen(["explorer", "/select,", os.path.normpath(path)])
+        if IS_WINDOWS:
+            subprocess.Popen(["explorer", "/select,", os.path.normpath(path)])
+        elif IS_MAC:
+            subprocess.Popen(["open", "-R", path])
+        else:
+            subprocess.Popen(["xdg-open", os.path.dirname(path) or path])
     except Exception:
         pass
 
@@ -10266,6 +10687,13 @@ class CameraListThread(QThread):
     listed = Signal(object)        # lista de dicts o None si fallo
 
     def run(self):
+        if not IS_WINDOWS:
+            try:
+                self.listed.emit(GPHOTO.list_files(tuple(e.lower() for e in MEDIA_EXTENSIONS_BY_MODE["all"])))
+            except Exception as e:
+                print("[gphoto2] listar:", e)
+                self.listed.emit(None)
+            return
         try:
             script = build_list_script(MEDIA_EXTENSIONS_BY_MODE["all"])
             proc = subprocess.run(['powershell', '-NoProfile', '-Command', script], capture_output=True, text=True,
@@ -10544,7 +10972,7 @@ class WpdCameraWorker(QThread):
                 self.not_responding.emit()
 
     def run(self):
-        cam = WpdCameraSession(self.name_match)
+        cam = WpdCameraSession(self.name_match) if IS_WINDOWS else GPhotoSession(self.name_match)
         try:
             if not cam.open(stop=lambda: self._stop):
                 return
@@ -12746,7 +13174,8 @@ def ffmpeg_exe():
             # app compilada: buscarlo junto al programa
             import glob
             base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
-            found = glob.glob(os.path.join(base, "imageio_ffmpeg", "binaries", "ffmpeg*.exe"))
+            found = [x for x in glob.glob(os.path.join(base, "imageio_ffmpeg", "binaries", "ffmpeg*"))
+                     if not x.endswith((".md", ".txt"))]
             _FFMPEG["exe"] = found[0] if found else ""
     return _FFMPEG["exe"] or None
 
@@ -13359,9 +13788,14 @@ class UpdateCheckThread(QThread):
             tag = (data.get("tag_name") or "").lstrip("vV")
             if _version_tuple(tag) <= _version_tuple(APP_VERSION):
                 return
-            asset = next((a for a in data.get("assets") or []
-                          if a.get("name", "").lower().startswith("goprosync-setup") and a["name"].lower().endswith(".exe")),
-                         None)
+            def wanted(n):
+                n = n.lower()
+                if IS_WINDOWS:
+                    return n.startswith("goprosync-setup") and n.endswith(".exe")
+                if IS_MAC:
+                    return n.endswith(".dmg")
+                return n.endswith(".appimage")
+            asset = next((a for a in data.get("assets") or [] if wanted(a.get("name", ""))), None)
             if asset:
                 self.found.emit({"version": tag, "url": asset["browser_download_url"], "size": asset.get("size", 0),
                                  "page": data.get("html_url", "")})
@@ -13455,7 +13889,7 @@ class UpdateDialog(QDialog):
         row.addStretch()
         self.btn_later = QPushButton(tr(lang, "update_later"))
         self.btn_later.clicked.connect(self.reject)
-        self.btn_now = QPushButton(tr(lang, "update_now"))
+        self.btn_now = QPushButton(tr(lang, "update_now" if IS_WINDOWS else "update_open_page"))
         self.btn_now.setObjectName("primary")
         self.btn_now.clicked.connect(self._download)
         row.addWidget(self.btn_later)
@@ -13463,6 +13897,11 @@ class UpdateDialog(QDialog):
         lay.addLayout(row)
 
     def _download(self):
+        if not IS_WINDOWS:
+            # macOS / Linux: se baja el .dmg / .AppImage desde la pagina del Release
+            QDesktopServices.openUrl(QUrl(self.info.get("page") or self.info["url"]))
+            self.accept()
+            return
         self.btn_now.setEnabled(False)
         self.bar.show()
         self.lbl_status.setText(tr(self.lang, "update_downloading", pct=0))
@@ -13731,5 +14170,54 @@ def main():
 
     sys.exit(app.exec())
 
+def run_selftest():
+    """Arranque sin ventana para CI (macOS/Linux/Windows): construye la
+    ventana principal, comprueba los componentes y sale."""
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    os.makedirs(CONFIG_DIR, exist_ok=True)
+    if not os.path.exists(CONFIG_FILE):
+        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+            json.dump({"onboarding_done": True, "language": "es", "language_chosen": True,
+                       "target_dir": os.path.join(tempfile.gettempdir(), "gpsync-selftest")}, f)
+    app = QApplication(sys.argv[:1])
+    ok = True
+    try:
+        w = MainWindow()
+        w.show()
+        end = time.monotonic() + 3
+        while time.monotonic() < end:
+            app.processEvents()
+            time.sleep(0.05)
+        print("SELFTEST ventana: OK")
+    except Exception:
+        traceback.print_exc()
+        ok = False
+    print("SELFTEST ffmpeg:", ffmpeg_exe() or "FALTA")
+    ok = ok and bool(ffmpeg_exe())
+    if not IS_WINDOWS:
+        has_gp = bool(GPHOTO.gp())
+        print("SELFTEST gphoto2:", "OK" if has_gp else "FALTA")
+        ok = ok and has_gp
+        if has_gp:
+            gp = GPHOTO.gp()
+            try:
+                ports = gp.PortInfoList()
+                ports.load()
+                abilities = gp.CameraAbilitiesList()
+                abilities.load()
+                n_ports, n_cams = ports.count(), abilities.count()
+            except Exception as e:
+                print("SELFTEST gphoto2 error:", e)
+                n_ports = n_cams = 0
+            # sin estos modulos libgphoto2 no ve ninguna camara (empaquetado incompleto)
+            print(f"SELFTEST gphoto2 puertos: {n_ports} | modelos conocidos: {n_cams}")
+            ok = ok and n_ports > 0 and n_cams > 0
+            print("SELFTEST camara:", GPHOTO.autodetect() or "ninguna conectada")
+    print("SELFTEST", "OK" if ok else "FALLO")
+    return 0 if ok else 1
+
+
 if __name__ == "__main__":
+    if "--selftest" in sys.argv:
+        sys.exit(run_selftest())
     main()

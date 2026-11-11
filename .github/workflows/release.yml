@@ -1,7 +1,7 @@
 name: Build y release
 
-# - Al subir un tag vX.Y.Z (lo hace release.ps1): compila y publica el Release
-#   en GitHub con el instalador y el ZIP portable.
+# - Al subir un tag vX.Y.Z (lo hace release.ps1): compila para Windows, macOS
+#   y Linux y publica el Release en GitHub con los instaladores.
 # - "Run workflow" manual en la pestaña Actions: solo compila y deja los
 #   archivos como artefactos descargables (para probar sin publicar).
 on:
@@ -13,7 +13,7 @@ permissions:
   contents: write
 
 jobs:
-  build:
+  windows:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -44,20 +44,72 @@ jobs:
         shell: pwsh
         run: ./packaging/build.ps1
 
-      - name: Subir artefactos
-        uses: actions/upload-artifact@v4
+      - name: Autoprueba del ejecutable
+        shell: pwsh
+        run: |
+          $env:QT_QPA_PLATFORM = "offscreen"
+          $p = Start-Process dist/GoProSync/GoProSync.exe -ArgumentList "--selftest" -Wait -PassThru -NoNewWindow
+          if ($p.ExitCode -ne 0) { throw "La autoprueba fallo (codigo $($p.ExitCode))" }
+
+      - uses: actions/upload-artifact@v4
         with:
-          name: GoProSync-${{ github.ref_name }}
+          name: windows
           path: |
             dist/GoProSync-Setup-*.exe
             dist/GoProSync-*-portable.zip
           if-no-files-found: error
 
+  macos:
+    runs-on: macos-14          # Apple Silicon (M1 y posteriores)
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: app/requirements.txt
+      - name: Compilar (.dmg)
+        run: PYTHON=python bash packaging/build_unix.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: dist/*.dmg
+          if-no-files-found: error
+
+  linux:
+    runs-on: ubuntu-22.04      # glibc 2.35: corre en Ubuntu 22.04+, Fedora 36+, Debian 12+...
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: app/requirements.txt
+      - name: Bibliotecas del sistema para Qt
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libegl1 libgl1 libopengl0 libxkbcommon0 libxkbcommon-x11-0 \
+            libxcb-cursor0 libfontconfig1 libdbus-1-3 libglib2.0-0 libpulse0 libpulse-mainloop-glib0 \
+            libusb-1.0-0 file
+      - name: Compilar (.AppImage)
+        run: PYTHON=python bash packaging/build_unix.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: dist/*.AppImage
+          if-no-files-found: error
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [windows, macos, linux]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: out
       - name: Publicar Release
-        if: startsWith(github.ref, 'refs/tags/')
-        shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          $files = Get-ChildItem dist -File | Where-Object { $_.Name -like "GoProSync-Setup-*.exe" -or $_.Name -like "*-portable.zip" } | ForEach-Object { $_.FullName }
-          gh release create "${{ github.ref_name }}" @files --title "GoPro Sync ${{ github.ref_name }}" --generate-notes
+          gh release create "${{ github.ref_name }}" out/*/* --repo "${{ github.repository }}" \
+            --title "GoPro Sync ${{ github.ref_name }}" --generate-notes
