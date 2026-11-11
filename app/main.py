@@ -340,7 +340,7 @@ TRANSLATIONS = {
         "cam_view_btn": "Dateien der Kamera ansehen",
         "file_gone": "{name} ist nicht mehr da (gelöscht oder verschoben).",
         "player_loading": "Video wird geladen…",
-        "video_broken_msg": "{name} ist beschädigt und kann nicht abgespielt werden. Rechtsklick > Reparatur versuchen.",
+        "video_broken_msg": "{name} ist beschädigt und kann nicht abgespielt werden. Rechtsklick → Reparatur versuchen.",
         "video_empty_msg": "{name} ist leer (0 Byte): nichts abzuspielen.",
         "gphoto_missing": "Die Komponente für die USB-Kamera (gphoto2) fehlt.",
         "gphoto_busy": "Ein anderes Programm verwendet die Kamera. Bitte schließen (Mac: Fotos oder Digitale Bilder; Linux: Kamera im Dateimanager aushängen) und erneut versuchen.",
@@ -701,7 +701,7 @@ TRANSLATIONS = {
         "cam_view_btn": "View camera files",
         "file_gone": "{name} is no longer there (deleted or moved).",
         "player_loading": "Loading video…",
-        "video_broken_msg": "{name} is damaged and cannot be played. Right-click > Try to repair.",
+        "video_broken_msg": "{name} is damaged and cannot be played. Right-click → Try to repair.",
         "video_empty_msg": "{name} is empty (0 bytes): there is nothing to play.",
         "gphoto_missing": "The USB camera component (gphoto2) is missing.",
         "gphoto_busy": "Another program is using the camera. Close it (on Mac: Photos or Image Capture; on Linux: unmount the camera in the file manager) and try again.",
@@ -1062,7 +1062,7 @@ TRANSLATIONS = {
         "cam_view_btn": "Ver archivos de la cámara",
         "file_gone": "{name} ya no está (se borró o se movió).",
         "player_loading": "Cargando video…",
-        "video_broken_msg": "{name} está dañado y no se puede reproducir. Clic derecho > Intentar reparar.",
+        "video_broken_msg": "{name} está dañado y no se puede reproducir. Clic derecho → Intentar reparar.",
         "video_empty_msg": "{name} está vacío (0 bytes): no hay nada para reproducir.",
         "gphoto_missing": "Falta el componente para la cámara por USB (gphoto2).",
         "gphoto_busy": "Otro programa está usando la cámara. Cerralo (en Mac: Fotos o Captura de Imagen; en Linux: desmontá la cámara del explorador de archivos) y volvé a intentar.",
@@ -1382,7 +1382,9 @@ TRANSLATIONS = {
 }
 
 
-_EMOJI_RE = re.compile("[\U0001F000-\U0001FFFF\u2190-\u21FF\u2300-\u23FF\u2600-\u27BF\u2B00-\u2BFF\uFE0F]")
+# Emojis y simbolos que Century Gothic NO tiene (las flechas U+2190-21FF si las
+# tiene, por eso no se quitan). Verificado contra la fuente con QRawFont.
+_EMOJI_RE = re.compile("[\U0001F000-\U0001FFFF⌀-⏿▶☀-➿⬀-⯿️]")
 
 
 def strip_emoji(text):
@@ -13094,6 +13096,8 @@ class MainWindow(QWidget):
         self.switch_page(self.ACTIVITY_INDEX, self.btn_nav_activity)
 
     def showEvent(self, event):
+        if IS_WINDOWS:
+            apply_dark_titlebar(int(self.winId()))
         super().showEvent(event)
         tb = getattr(self, "taskbar", None)
         if tb is not None and tb.last is not None:
@@ -14084,9 +14088,25 @@ def apply_dark_titlebar(hwnd):
         pass
 
 
+def _install_dialog_dark_titlebar():
+    """Todo dialogo (propio o de Qt) pone la barra oscura justo al mostrarse,
+    antes de dibujarse: antes se aplicaba al recibir el foco y se veia un
+    instante con el estilo claro de Windows."""
+    if not IS_WINDOWS or getattr(QDialog, "_dark_titlebar_hooked", False):
+        return
+    original = QDialog.showEvent
+
+    def show_event(self, event):
+        apply_dark_titlebar(int(self.winId()))
+        original(self, event)
+    QDialog.showEvent = show_event
+    QDialog._dark_titlebar_hooked = True
+
+
 def install_dark_titlebars(app):
     """Cada ventana nueva (dialogos, visores) recibe la barra oscura al
     activarse; se marca para no repetirlo."""
+    _install_dialog_dark_titlebar()
     done = set()
 
     def on_focus(win):
@@ -14204,7 +14224,7 @@ def main():
     minimize_own_console()
     app = QApplication(sys.argv)
     app.setWindowIcon(load_app_icon())
-    install_dark_titlebars(app)
+    install_dark_titlebars(app)       # respaldo: otras ventanas, al recibir el foco
 
     config = load_config()
     def get_glow_color():
