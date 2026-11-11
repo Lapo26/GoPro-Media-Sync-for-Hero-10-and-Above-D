@@ -9,7 +9,7 @@
     powershell -ExecutionPolicy Bypass -File packaging\build.ps1 -SkipInstaller
     powershell -ExecutionPolicy Bypass -File packaging\build.ps1 -Python C:\ruta\python.exe
 
-  La version se lee de APP_VERSION en app\main.py (la fija release.ps1).
+  La version se lee de APP_VERSION en app\gopro_sync\version.py (la fija release.ps1).
 #>
 param(
     [string]$Python = "python",
@@ -21,9 +21,9 @@ $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $PSScriptRoot
 Set-Location $Root
 
-$mainPy = Join-Path $Root "app\main.py"
-$m = Select-String -Path $mainPy -Pattern '^APP_VERSION\s*=\s*"([^"]+)"' | Select-Object -First 1
-if (-not $m) { throw "No se encontro APP_VERSION en app\main.py" }
+$versionPy = Join-Path $Root "app\gopro_sync\version.py"
+$m = Select-String -Path $versionPy -Pattern '^APP_VERSION\s*=\s*"([^"]+)"' | Select-Object -First 1
+if (-not $m) { throw "No se encontro APP_VERSION en app\gopro_sync\version.py" }
 $Version = $m.Matches[0].Groups[1].Value
 Write-Host "== GoPro Sync $Version ==" -ForegroundColor Cyan
 

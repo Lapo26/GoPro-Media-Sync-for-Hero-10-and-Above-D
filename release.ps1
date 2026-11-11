@@ -6,9 +6,9 @@
 
   Que hace:
     1. Comprueba que estas en "main", sin cambios pendientes y al dia con GitHub.
-    2. Cambia APP_VERSION en app\main.py, hace commit "Release v1.1.0" y crea el tag v1.1.0.
-    3. Sube main y el tag. GitHub Actions compila y publica el Release con el
-       instalador y el ZIP portable (tarda ~5-10 min).
+    2. Cambia APP_VERSION en app\gopro_sync\version.py, hace commit "Release v1.1.0" y crea el tag v1.1.0.
+    3. Sube main y el tag. GitHub Actions compila para Windows, macOS y Linux y
+       publica el Release con los instaladores (tarda ~10 min).
 #>
 param(
     [Parameter(Mandatory = $true)][string]$Version
@@ -36,14 +36,14 @@ if (git tag -l $tag) { throw "El tag $tag ya existe." }
 $behind = (git rev-list --count "HEAD..origin/main").Trim()
 if ([int]$behind -gt 0) { throw "Tu main esta $behind commit(s) atras de origin/main. Haz 'git pull' primero." }
 
-$mainPy = Join-Path $PSScriptRoot "app\main.py"
-$content = [System.IO.File]::ReadAllText($mainPy)
+$versionPy = Join-Path $PSScriptRoot "app\gopro_sync\version.py"
+$content = [System.IO.File]::ReadAllText($versionPy)
 $new = [regex]::Replace($content, '(?m)^APP_VERSION\s*=\s*"[^"]*"', "APP_VERSION = `"$Version`"")
 if ($new -eq $content) {
     Write-Host "APP_VERSION ya es $Version."
 } else {
-    [System.IO.File]::WriteAllText($mainPy, $new, (New-Object System.Text.UTF8Encoding($false)))
-    Run "git add app/main.py"
+    [System.IO.File]::WriteAllText($versionPy, $new, (New-Object System.Text.UTF8Encoding($false)))
+    Run "git add app/gopro_sync/version.py"
     Run "git commit -m `"Release $tag`""
 }
 

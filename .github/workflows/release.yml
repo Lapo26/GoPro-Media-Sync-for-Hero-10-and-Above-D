@@ -29,9 +29,9 @@ jobs:
         shell: pwsh
         run: |
           $tag = "${{ github.ref_name }}".TrimStart("v")
-          $m = Select-String -Path app/main.py -Pattern '^APP_VERSION\s*=\s*"([^"]+)"'
+          $m = Select-String -Path app/gopro_sync/version.py -Pattern '^APP_VERSION\s*=\s*"([^"]+)"'
           $ver = $m.Matches[0].Groups[1].Value
-          if ($tag -ne $ver) { throw "El tag v$tag no coincide con APP_VERSION=$ver en app/main.py. Usa release.ps1." }
+          if ($tag -ne $ver) { throw "El tag v$tag no coincide con APP_VERSION=$ver en app/gopro_sync/version.py. Usa release.ps1." }
 
       - name: Instalar Inno Setup si falta
         shell: pwsh

@@ -74,7 +74,24 @@ Las herramientas corren en segundo plano en **Actividad**, con progreso y Cancel
 ## Desarrollo
 
 ```
-app/                 código de la app (main.py) y recursos (assets/)
+app/main.py              punto de entrada (lanza gopro_sync.app)
+app/assets/              imágenes, sonidos y videos de la interfaz
+app/gopro_sync/
+  version.py             versión de la app (la fija release.ps1) y repositorio
+  env.py                 plataforma, rutas, configuración y estado compartido
+  i18n.py                textos en español, inglés y alemán
+  winshell.py            integración con el sistema (barra de tareas, papelera, inicio automático...)
+  camera.py              detección de la cámara (MTP en Windows, libgphoto2 en macOS/Linux)
+  mtp.py                 archivos de la cámara: PowerShell (MTP) y acceso directo por WPD
+  media.py               metadatos: EXIF, MP4, fechas, videos dañados, GPS (GPMF)
+  fileops.py             copia segura, duplicados y conteos
+  workers.py             sincronizar, importar y respaldar en segundo plano
+  videotools.py          ffmpeg: versión liviana, unir partes, reparar
+  updates.py             búsqueda de versiones nuevas
+  sound.py               sonidos de la interfaz
+  app.py                 arranque y autoprueba (--selftest)
+  ui/                    interfaz: main_window, sync_tab, gallery, thumbs, viewers, map,
+                         dialogs, activity, camera_page, settings, widgets, graphics
 packaging/build.ps1  compila en Windows: PyInstaller + ZIP portable + instalador Inno Setup
 packaging/build_unix.sh  compila en macOS (.dmg) o Linux (.AppImage)
 packaging/try.ps1    abre la versión actual para probarla en tu PC
@@ -83,7 +100,7 @@ release.ps1          publica una versión nueva
 .github/workflows/release.yml  build y Release automáticos en GitHub
 ```
 
-**Ejecutar desde el código:** `app\install.bat` (instala Python y dependencias), y después `python app\main.py`.
+**Ejecutar desde el código:** `app\install.bat` (o `pip install -r app\requirements.txt`) y después `python app\main.py`. La autoprueba sin ventana: `python app\main.py --selftest`.
 
 **Compilar localmente:** `powershell -ExecutionPolicy Bypass -File packaging\build.ps1`. El resultado queda en `dist\`. Para generar también el instalador hace falta Inno Setup (`winget install JRSoftware.InnoSetup`).
 

@@ -5,7 +5,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 PY="${PYTHON:-python3}"
-VERSION=$(sed -n 's/^APP_VERSION = "\(.*\)"/\1/p' app/main.py)
+VERSION=$(sed -n 's/^APP_VERSION = "\(.*\)"/\1/p' app/gopro_sync/version.py)
 OS=$(uname -s)
 echo "== GoPro Sync $VERSION ($OS) =="
 
