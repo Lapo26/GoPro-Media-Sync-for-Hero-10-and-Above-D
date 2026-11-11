@@ -12,16 +12,25 @@ echo "== GoPro Sync $VERSION ($OS) =="
 "$PY" -m pip install --disable-pip-version-check -q -r app/requirements.txt pyinstaller pillow
 rm -rf build dist
 
+# libgphoto2 carga sus modulos (camlibs/iolibs) en tiempo de ejecucion y estos
+# buscan sus bibliotecas por ruta relativa: hay que copiarlas tal cual.
+SP=$("$PY" -c "import gphoto2, os; print(os.path.dirname(os.path.dirname(gphoto2.__file__)))")
+GPHOTO_DATA=(--add-data "$SP/gphoto2/libgphoto2:gphoto2/libgphoto2")
+if [ -d "$SP/gphoto2.libs" ]; then GPHOTO_DATA+=(--add-data "$SP/gphoto2.libs:gphoto2.libs"); fi
+if [ -d "$SP/gphoto2/.dylibs" ]; then GPHOTO_DATA+=(--add-data "$SP/gphoto2/.dylibs:gphoto2/.dylibs"); fi
+
 COMMON=(--noconfirm --clean --windowed --name GoProSync
         --add-data "app/assets:assets"
         --collect-data imageio_ffmpeg
         --collect-all gphoto2
+        "${GPHOTO_DATA[@]}"
         --exclude-module tkinter --exclude-module unittest --exclude-module pydoc
         --distpath dist --workpath build)
 
 if [ "$OS" = "Darwin" ]; then
   "$PY" -m PyInstaller "${COMMON[@]}" --icon app/assets/app_icon.png \
       --osx-bundle-identifier com.gopro-sync.app app/main.py
+  find dist/GoProSync.app -path "*gphoto2*" -maxdepth 6 -type d | head -20
   # Autoprueba del ejecutable empaquetado (sin ventana)
   QT_QPA_PLATFORM=offscreen "dist/GoProSync.app/Contents/MacOS/GoProSync" --selftest
   ARCH=$(uname -m)
@@ -30,6 +39,7 @@ if [ "$OS" = "Darwin" ]; then
   ls -la dist/*.dmg
 else
   "$PY" -m PyInstaller "${COMMON[@]}" app/main.py
+  ls dist/GoProSync/_internal/gphoto2.libs | head -5; ls dist/GoProSync/_internal/gphoto2/libgphoto2/iolibs
   QT_QPA_PLATFORM=offscreen dist/GoProSync/GoProSync --selftest
   # AppImage: un solo archivo que corre en la mayoria de las distribuciones
   APPDIR=dist/AppDir
