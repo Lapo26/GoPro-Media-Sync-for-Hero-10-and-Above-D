@@ -11,7 +11,7 @@ Fork de [JelloC19/GoPro-Media-Sync-for-Hero-10-and-Above-D](https://github.com/J
 
 ## Descargar e instalar
 
-En **[Releases](https://github.com/Lapo26/GoPro-Media-Sync-for-Hero-10-and-Above-D/releases/latest)**:
+En **[Releases](https://github.com/Lapo26/GoPro-Sync/releases/latest)**:
 
 - `GoProSync-Setup-X.Y.Z.exe`: el **instalador**. No pide permisos de administrador, agrega GoPro Sync al menú Inicio, ofrece crear el acceso directo en el escritorio y queda en *Aplicaciones* de Windows con su desinstalador.
 - `GoProSync-X.Y.Z-portable.zip`: la versión **portable**. Se descomprime y se ejecuta `GoProSync.exe`.

@@ -113,9 +113,9 @@ def minimize_own_console():
 
 # Version de la app. La actualiza release.ps1 (y el workflow de release al compilar).
 APP_VERSION = "1.3.2"
-# Repositorio de GitHub de donde salen las versiones (si se renombra, GitHub
+# Repositorio de GitHub de donde salen las versiones (si se vuelve a renombrar, GitHub
 # redirige la API, pero conviene mantener esto al dia).
-GITHUB_REPO = "Lapo26/GoPro-Media-Sync-for-Hero-10-and-Above-D"
+GITHUB_REPO = "Lapo26/GoPro-Sync"
 
 CONFIG_DIR = os.path.join(os.getenv("APPDATA") or os.path.expanduser("~"), "GoProSyncPro")
 CONFIG_FILE = os.path.join(CONFIG_DIR, "sync_config.json")
