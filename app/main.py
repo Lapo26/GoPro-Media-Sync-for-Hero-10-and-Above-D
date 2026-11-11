@@ -338,6 +338,10 @@ TRANSLATIONS = {
         "cam_preview_loading": "Vorschau wird von der Kamera geholt…",
         "cam_preview_failed": "Die Vorschau konnte nicht von der Kamera geholt werden.",
         "cam_view_btn": "Dateien der Kamera ansehen",
+        "file_gone": "{name} ist nicht mehr da (gelöscht oder verschoben).",
+        "player_loading": "Video wird geladen…",
+        "video_broken_msg": "{name} ist beschädigt und kann nicht abgespielt werden. Rechtsklick > Reparatur versuchen.",
+        "video_empty_msg": "{name} ist leer (0 Byte): nichts abzuspielen.",
         "gphoto_missing": "Die Komponente für die USB-Kamera (gphoto2) fehlt.",
         "gphoto_busy": "Ein anderes Programm verwendet die Kamera. Bitte schließen (Mac: Fotos oder Digitale Bilder; Linux: Kamera im Dateimanager aushängen) und erneut versuchen.",
         "update_open_page": "Download öffnen",
@@ -695,6 +699,10 @@ TRANSLATIONS = {
         "cam_preview_loading": "Getting the preview from the camera…",
         "cam_preview_failed": "Could not get the preview from the camera.",
         "cam_view_btn": "View camera files",
+        "file_gone": "{name} is no longer there (deleted or moved).",
+        "player_loading": "Loading video…",
+        "video_broken_msg": "{name} is damaged and cannot be played. Right-click > Try to repair.",
+        "video_empty_msg": "{name} is empty (0 bytes): there is nothing to play.",
         "gphoto_missing": "The USB camera component (gphoto2) is missing.",
         "gphoto_busy": "Another program is using the camera. Close it (on Mac: Photos or Image Capture; on Linux: unmount the camera in the file manager) and try again.",
         "update_open_page": "Open download",
@@ -1052,6 +1060,10 @@ TRANSLATIONS = {
         "cam_preview_loading": "Trayendo la vista previa desde la cámara…",
         "cam_preview_failed": "No se pudo traer la vista previa de la cámara.",
         "cam_view_btn": "Ver archivos de la cámara",
+        "file_gone": "{name} ya no está (se borró o se movió).",
+        "player_loading": "Cargando video…",
+        "video_broken_msg": "{name} está dañado y no se puede reproducir. Clic derecho > Intentar reparar.",
+        "video_empty_msg": "{name} está vacío (0 bytes): no hay nada para reproducir.",
         "gphoto_missing": "Falta el componente para la cámara por USB (gphoto2).",
         "gphoto_busy": "Otro programa está usando la cámara. Cerralo (en Mac: Fotos o Captura de Imagen; en Linux: desmontá la cámara del explorador de archivos) y volvé a intentar.",
         "update_open_page": "Abrir la descarga",
@@ -6304,8 +6316,13 @@ class VideoPlayerDialog(QDialog):
         c_layout.setContentsMargins(16, 10, 16, 10)
         c_layout.setSpacing(12)
 
-        def _round_btn(text, tooltip=""):
-            btn = QPushButton(text)
+        def _round_btn(ch, tooltip=""):
+            # Emoji como icono (una sola fuente): como texto, la primera vez
+            # Windows buscaba la fuente en todo el sistema y el reproductor
+            # tardaba ~3 s en aparecer.
+            btn = QPushButton()
+            btn.setIcon(QIcon(emoji_icon(ch, 18)))
+            btn.setIconSize(QSize(18, 18))
             btn.setFixedSize(38, 38)
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
             btn.setToolTip(tooltip)
@@ -6329,7 +6346,8 @@ class VideoPlayerDialog(QDialog):
         self.slider_seek.sliderMoved.connect(self.on_seek)
         c_layout.addWidget(self.slider_seek, 1)
 
-        vol_icon = QLabel("🔊")
+        vol_icon = QLabel()
+        vol_icon.setPixmap(emoji_icon("🔊", 18).pixmap(18, 18))
         vol_icon.setStyleSheet("background: transparent;")
         c_layout.addWidget(vol_icon)
         self.slider_volume = QSlider(Qt.Orientation.Horizontal)
@@ -6362,11 +6380,46 @@ class VideoPlayerDialog(QDialog):
         # exakt wie vor dem 360-Feature, also wieder mit voller Performance.
         self.player.setVideoOutput(self.video_widget)
 
-        self.player.setSource(QUrl.fromLocalFile(path))
         self.player.metaDataChanged.connect(self._on_metadata_changed)
         self.player.positionChanged.connect(self.on_position_changed)
         self.player.durationChanged.connect(self.on_duration_changed)
+        self.player.mediaStatusChanged.connect(self._on_media_status)
+        # Abrir el video bloqueaba la ventana ~1-3 s antes de mostrarse (Qt lee
+        # el indice, que en la GoPro esta al FINAL del archivo, en el disco).
+        # Ahora: la ventana aparece ya con "Cargando video...", el indice se
+        # lee en segundo plano (queda en la memoria de Windows) y recien
+        # despues se abre el video.
+        self._path = path
+        self.loading_lbl = QLabel(tr(lang, "player_loading"), self.stack)
+        self.loading_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.loading_lbl.setStyleSheet("color: rgba(255,255,255,0.75); font-size: 16px; background: transparent;")
+        QTimer.singleShot(60, self._start_loading)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if getattr(self, "loading_lbl", None) is not None:
+            self.loading_lbl.setGeometry(self.stack.rect())
+
+    def _start_loading(self):
+        self.loading_lbl.setGeometry(self.stack.rect())
+        self.loading_lbl.raise_()
+        th = ScanThread(0, lambda: _read_moov(self._path))
+        th.done.connect(lambda _t, _r: self._open_media())
+        th.start()
+
+    def _open_media(self):
+        if not self.isVisible():
+            return
+        self.player.setSource(QUrl.fromLocalFile(self._path))
         self.player.play()
+
+    def _on_media_status(self, status):
+        if status in (QMediaPlayer.MediaStatus.LoadedMedia, QMediaPlayer.MediaStatus.BufferedMedia,
+                      QMediaPlayer.MediaStatus.BufferingMedia, QMediaPlayer.MediaStatus.EndOfMedia):
+            self.loading_lbl.hide()
+        elif status == QMediaPlayer.MediaStatus.InvalidMedia:
+            self.loading_lbl.setText(tr(self.lang, "video_broken_msg", name=os.path.basename(self._path)))
+            self.loading_lbl.show()
 
     def _on_metadata_changed(self):
         # Erkennt 360-Grad-Videos anhand der Aufloesung aus den Metadaten -
@@ -6451,10 +6504,10 @@ class VideoPlayerDialog(QDialog):
         SoundManager.play_click()
         if self.player.playbackState() == QMediaPlayer.PlaybackState.PlayingState:
             self.player.pause()
-            self.btn_play.setText("▶")
+            self.btn_play.setIcon(QIcon(emoji_icon("▶", 18)))
         else:
             self.player.play()
-            self.btn_play.setText("⏸")
+            self.btn_play.setIcon(QIcon(emoji_icon("⏸", 18)))
 
     def on_seek(self, value):
         self.player.setPosition(value)
@@ -6778,7 +6831,8 @@ class ThumbGridView(QAbstractScrollArea):
             return
         i = self.files.index(path)
         del self.files[i]
-        del self.dates[i]
+        if i < len(self.dates):
+            del self.dates[i]
         self.lru.pop(path, None)
         if self.hover == path:
             self.hover = None
@@ -7120,7 +7174,7 @@ class GalleryBase(QWidget):
         # Vista virtualizada (dibuja solo lo visible); "scroll" se mantiene como
         # nombre por compatibilidad con el resto del codigo.
         self.view = ThumbGridView(self)
-        self.view.activated.connect(lambda path: self.play_video(path) if self.KIND == "video" else self.open_image(path))
+        self.view.activated.connect(self._open_item)
         self.view.context.connect(self._show_context_menu)
         self.scroll = self.view
         outer.addWidget(self.view)
@@ -7179,9 +7233,80 @@ class GalleryBase(QWidget):
         self.scroll.hide()
         self.empty_lbl.show()
 
+    def _forget_missing(self, path):
+        """El archivo se borro o movio por fuera de la app: sacarlo de la galeria."""
+        if os.path.exists(path):
+            return False
+        self.view.remove_path(path)
+        if getattr(self, "_all_files", None) and path in self._all_files:
+            self._all_files.remove(path)
+        show_toast(self, tr(self.lang, "file_gone", name=os.path.basename(path)))
+        return True
+
+    def _open_item(self, path):
+        if self._forget_missing(path):
+            return
+        if self.KIND == "video":
+            try:
+                size = os.path.getsize(path)
+            except OSError:
+                size = 0
+            if size == 0:
+                show_toast(self, tr(self.lang, "video_empty_msg", name=os.path.basename(path)))
+                return
+            if is_broken_mp4(path):
+                show_toast(self, tr(self.lang, "video_broken_msg", name=os.path.basename(path)))
+                return
+            self.play_video(path)
+        else:
+            self.open_image(path)
+
+    def soft_refresh(self):
+        """Revisa la carpeta en segundo plano (al volver a la app): saca lo que
+        ya no esta sin perder la posicion, o recarga si hay archivos nuevos."""
+        if not self.isVisible() or getattr(self, "_soft_running", False) or getattr(self, "_all_files", None) is None:
+            return
+        self._soft_running = True
+        folder, exts = self.folder, tuple(e.lower() for e in self.EXTENSIONS)
+
+        def scan():
+            found, stack = set(), [folder]
+            while stack:
+                d = stack.pop()
+                try:
+                    with os.scandir(d) as it:
+                        for e in it:
+                            try:
+                                if e.is_dir(follow_symlinks=False):
+                                    stack.append(e.path)
+                                elif e.name.lower().endswith(exts):
+                                    found.add(e.path)
+                            except OSError:
+                                pass
+                except OSError:
+                    pass
+            return found
+        th = ScanThread(0, scan)
+        th.done.connect(self._on_soft_scan)
+        th.start()
+
+    def _on_soft_scan(self, _t, found):
+        self._soft_running = False
+        if found is None or getattr(self, "_all_files", None) is None:
+            return
+        current = set(self._all_files)
+        if found - current:
+            self.refresh()                       # hay archivos nuevos: recargar
+            return
+        for path in current - found:
+            self.view.remove_path(path)
+            self._all_files.remove(path)
+
     def _show_context_menu(self, path, global_pos):
         """Clic derecho en una miniatura: ruta, copiar ruta, Explorador,
         abrir e informacion del archivo (metadatos)."""
+        if self._forget_missing(path):
+            return
         menu = QMenu(self)
         head = menu.addAction(short_path(path, keep=3))
         head.setEnabled(False)
@@ -7200,7 +7325,7 @@ class GalleryBase(QWidget):
             menu.addAction(tr(self.lang, "ctx_light"), lambda: main.make_light_version(path))
             menu.addAction(tr(self.lang, "ctx_map"), lambda: GpsMapDialog(
                 self, self.lang, path, getattr(main, "get_current_theme_color", lambda: "#00f2fe")()).exec())
-            if os.path.getsize(path) > 0 and is_broken_mp4(path):
+            if os.path.exists(path) and os.path.getsize(path) > 0 and is_broken_mp4(path):
                 menu.addAction(tr(self.lang, "ctx_repair"), lambda: main.repair_video(path))
             group = chapter_group_of(path)
             if group and not group["done"] and not group["damaged"]:
@@ -12945,6 +13070,13 @@ class MainWindow(QWidget):
         self.btn_nav_pictures.setChecked(False)
         self.btn_nav_activity.setChecked(False)
         btn.setChecked(True)
+
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if event.type() == QEvent.Type.ActivationChange and self.isActiveWindow():
+            page = self.pages.currentWidget() if hasattr(self, "pages") else None
+            if hasattr(page, "soft_refresh"):
+                QTimer.singleShot(200, page.soft_refresh)
 
     def show_camera_files(self):
         self.pages.setCurrentIndex(self.CAMERA_INDEX)
